@@ -1,0 +1,15 @@
+services:
+  web:
+    build: .
+    command: sh -c "python manage.py migrate && python manage.py runserver 0.0.0.0:8000"
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    volumes:
+      # live-mount source for dev; runtime holds the sqlite db + per-project state
+      - .:/app
+      - ash-runtime:/app/runtime
+
+volumes:
+  ash-runtime:
