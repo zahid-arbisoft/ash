@@ -1,11 +1,9 @@
-# ASH control plane (Django) + engine. Runs the web/admin + management commands.
-# NOTE: agent runs that push code need git credentials (gh/SSH) — not wired into the image yet;
-# this image is for the control plane and engine logic. See README.
+# ASH — Agentic Software House engine (FastAPI + LangGraph).
+# NOTE: agent runs that push code need git credentials (gh/SSH) — not wired into the image yet.
 FROM python:3.12-slim
 
 ENV PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1 \
-    DJANGO_SETTINGS_MODULE=config.settings.dev
+    PYTHONDONTWRITEBYTECODE=1
 
 # git is required by GitPython (worktree ops)
 RUN apt-get update && apt-get install -y --no-install-recommends git \
@@ -13,14 +11,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends git \
 
 WORKDIR /app
 
-# Install deps first (better layer caching): copy only what the build needs
+# Install deps first (better layer caching)
 COPY pyproject.toml ./
-COPY engine ./engine
-RUN pip install --no-cache-dir -e ".[server]"
+COPY src ./src
+RUN pip install --no-cache-dir -e .
 
-# Copy the rest of the monorepo
+# Copy the rest (projects/, skills/, etc.)
 COPY . .
 
 EXPOSE 8000
 
-CMD ["sh", "-c", "python manage.py migrate && python manage.py runserver 0.0.0.0:8000"]
+CMD ["uvicorn", "ash.api.app:app", "--host", "0.0.0.0", "--port", "8000"]

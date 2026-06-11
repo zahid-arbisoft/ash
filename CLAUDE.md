@@ -4,7 +4,8 @@ This file is my own working memory for this project. If I forget how we work, I 
 the plan before doing anything else.
 
 ## Source of truth
-- The plan is **`docs/plan/loop_engineered_sdlc_plan.md`**. It is authoritative.
+- The plan is **`docs/plan/ash_architecture_and_plan.md`**. It is authoritative. The original source
+  specs live in **`docs/sources/`**.
 - **Every decision and every implementation change is recorded in the plan**, and appended to its
   **Changelog (§11)**. The plan never lags the code. Do this in the same turn as the change — don't
   defer it.
@@ -25,36 +26,36 @@ client/target #1; SaaS packaging is a later layer that must not change the agent
 3. **Triggers (inputs) and sinks (outputs) are pluggable connectors**, selected in config — not code
    changes. Don't hardwire "GitHub issue in, JSON out".
 3b. **Specs → Board, code → PR** (§4c). Specs/tickets publish to a Board sink (file today;
-   Jira/Plane/Trello later) for client oversight; PRs carry **implementation only**. The skeleton's
-   spec-in-PR is temporary and must be corrected when the Coding agent lands.
+   Jira/Plane/Trello later) for client oversight; PRs carry **implementation only**.
 4. **Repo topology is per-project**: `fork` / `single` / `closed-source(private)`.
 5. **Sequencing discipline:** do NOT build triggers/sinks/UI until the core loop (Phases 0–3) is
    trustworthy. Keep human verification gates until the layer below has earned removal.
 
 ## Environment notes
-- LLM is provider-agnostic. User runs a **LiteLLM gateway** (`/v1`) → use `LLM_PROVIDER=openai`
-  (NOT `anthropic`, which would double the `/v1` path and use the wrong wire format).
-- Models (Groq): PM=`gpt-oss-120b`, Dev/Fixer=`qwen3-32b`, Reviewer=`llama-3.3-70b-versatile`.
-  LLM client auto-falls back to JSON mode when tool-calling validation fails (small models).
+- LLM is provider-agnostic via a **LangChain** factory. For a **LiteLLM gateway** (`/v1`) use
+  `LLM__PROVIDER=openai` + `LLM_BASE_URL=...` (NOT `anthropic`). Per-agent overrides via
+  `AGENT_<NAME>__MODEL`. Agents force structure via `.with_structured_output`.
 - `gh` CLI is authenticated as `zahid-arbisoft`. **Git auth = HTTPS via gh** (`gh auth setup-git`);
   the engine fetches/pushes over the HTTPS URL, NOT the clone's SSH origin (no ssh-agent headless).
-- Local clone: `LOCAL_REPO_PATH=/Users/zahid.ali/Documents/python/oss/plane` (origin=fork).
-- Python 3.14, venv at `.venv`. Engine is editable-installed (`pip install -e .[server,dev]`), so no
-  `PYTHONPATH` needed. Commands live in the `justfile` (`just --list`). Tooling: ruff + pytest.
-- **Monorepo:** engine = `engine/src/ash` (Django-free). Control plane = Django
-  (`config/` project w/ split settings + `apps/house/` app: Client→Project→Run, admin, `manage.py
-  build`). Engine never imports Django; Django imports the engine. DB = SQLite `runtime/ash.sqlite3`.
-  Docs/plan under `docs/`. `config.py` finds repo root via `projects/`/`pyproject.toml` (or `ASH_ROOT`).
-- Root folder rename to `ash` is **pending** (user does it + rebuilds `.venv`); don't assume it's done.
+- Local clone via `LOCAL_REPO_PATH` (origin=fork). Without it, Research/Coding **skip gracefully**
+  so a PM-only run still completes.
+- **Python ≥3.12** (target 3.12; 3.13 also fine). `.venv` is built with `python3.13` here since 3.12
+  isn't installed locally and the old 3.14 venv can't take the langchain/langgraph wheels. Engine is
+  editable-installed (`pip install -e .[dev]`). Commands live in the `justfile` (`just --list`).
+- **Architecture:** single package `src/ash/` (no Django). Entry = **FastAPI** (`src/ash/api`,
+  `POST /runs` / `GET /runs/{id}`); orchestration = **LangGraph** (`src/ash/graph`); run state of
+  record = **Postgres checkpointer** (AsyncPostgresSaver). Tools are 3-layer: `clients/` →
+  `toolkits/` → agents. Config is hybrid: `pydantic-settings` + `projects/<name>.yaml`. `config`
+  finds repo root via `projects/`/`pyproject.toml` (or `ASH_ROOT`). Quality gates: ruff + **mypy
+  --strict** + pytest, enforced in CI (`.github/workflows/ci.yml`) + pre-commit.
 
 ## Current status
-- Phase 0 (PM → spec) and Phase 1 **build-team flow** are working end-to-end:
-  issue → spec→**Board** (`runtime/<proj>/board/`) → worktree → **Research** → **Coding** → commit →
-  push → **PR carries code** → merge gate → worktree cleanup. Verified live (PRs #2/#3) + persisted
-  via Django (`manage.py build`, Run rows).
-- **Open follow-up (important):** agent grounding is shallow — coding v1 fabricated internal paths
-  for Plane (TS/MobX) like `apps/admin/*.jsx`+Redux. Deepen research/coding: verify paths vs the real
-  tree, read real files before editing. Don't trust generated code yet.
-- Spec-quality validation on a strong model still a useful human check.
-- Next options: (a) deepen grounding, (b) Phase 2 Reviewer agent + LangGraph + checkpointing,
-  (c) Phase 4 heartbeat. Keep human gates until each layer earns removal.
+- **Re-architected (2026-06-11)** to FastAPI + async + LangGraph + Postgres + LangChain (decisions
+  #15–#18; #14 Django removed). Graph: PM→Research→Coding→Reviewer→Fixer→Merge over a namespaced
+  `WorkflowState`, checkpointed in Postgres, served over FastAPI. PM/Research/Coding are real;
+  Reviewer/Fixer are stubs.
+- Verified: ruff clean, **mypy --strict clean (36 files)**, **30 pytest tests green**, FastAPI + CLI
+  boot. Live Postgres/LLM runs pending real `.env` credentials.
+- **Open follow-ups:** real Reviewer (maker/checker separation), bounded Fixer loop, move worktree
+  cleanup from Coding→Merge once Reviewer/Fixer are real, deferred post-comment, deepen code grounding
+  (don't trust generated code yet). Keep human gates until each layer earns removal.

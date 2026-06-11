@@ -61,6 +61,10 @@ staticfiles/
 .DS_Store
 Thumbs.db
 
-# ── per-project generated state (specs, logs, worktrees, runtime DB) ──
+# ── local data services (docker volumes if bind-mounted) ──
+postgres-data/
+chroma-data/
+
+# ── per-project generated state (specs, logs, worktrees) ──
 runtime/*
 !runtime/.gitkeep

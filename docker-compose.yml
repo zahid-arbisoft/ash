@@ -1,15 +1,37 @@
 services:
-  web:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ash
+      POSTGRES_PASSWORD: ash
+      POSTGRES_DB: ash
+    ports:
+      - "5432:5432"
+    volumes:
+      - ash-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ash"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
     build: .
-    command: sh -c "python manage.py migrate && python manage.py runserver 0.0.0.0:8000"
+    command: uvicorn ash.api.app:app --host 0.0.0.0 --port 8000
     ports:
       - "8000:8000"
     env_file:
       - .env
+    environment:
+      # override the default DSN to reach the compose service by name
+      POSTGRES_DSN: postgresql://ash:ash@postgres:5432/ash
+    depends_on:
+      postgres:
+        condition: service_healthy
     volumes:
-      # live-mount source for dev; runtime holds the sqlite db + per-project state
       - .:/app
       - ash-runtime:/app/runtime
 
 volumes:
+  ash-postgres:
   ash-runtime:
