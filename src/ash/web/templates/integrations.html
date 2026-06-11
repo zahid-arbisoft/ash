@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}Integrations{% endblock %}
+{% block body %}
+<h1>Integrations</h1>
+<p class="muted">Issue sources the PM/intake layer can pull from. Manage (add/edit/delete) in the
+  <a href="/admin" target="_blank">Admin portal</a> — secrets are encrypted at rest.</p>
+
+<div class="card">
+  {% if integrations %}
+    <table>
+      <tr><th>Name</th><th>Kind</th><th>Base URL</th><th>Enabled</th></tr>
+      {% for i in integrations %}
+        <tr>
+          <td>{{ i.name }}</td>
+          <td><span class="pill">{{ i.kind.value }}</span></td>
+          <td class="muted">{{ i.base_url or "—" }}</td>
+          <td>{{ "✓" if i.enabled else "—" }}</td>
+        </tr>
+      {% endfor %}
+    </table>
+  {% else %}
+    <p class="muted">No integrations yet.</p>
+  {% endif %}
+  <p style="margin-top:1rem"><a class="btn" href="/admin" target="_blank">Add integration</a></p>
+</div>
+{% endblock %}

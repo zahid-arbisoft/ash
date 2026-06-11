@@ -11,6 +11,8 @@ class RunRequest(BaseModel):
     project: str
     item_id: str
     board: str = "github"
+    intake_mode: str = "raw_to_spec"  # raw_to_spec | spec_ready | raw_to_dev
+    integration_id: int | None = None
 
 
 class RunAccepted(BaseModel):

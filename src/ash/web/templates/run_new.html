@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}New run{% endblock %}
+{% block body %}
+<h1>Start a run</h1>
+<div class="card">
+  <form method="post" action="/ui/runs">
+    <label for="project">Project (work target / autonomy)</label>
+    <select id="project" name="project" required>
+      {% for p in projects %}<option value="{{ p }}">{{ p }}</option>{% endfor %}
+    </select>
+
+    <label for="integration_id">Issue source (integration)</label>
+    <select id="integration_id" name="integration_id">
+      <option value="">— legacy GitHub (from project config) —</option>
+      {% for i in integrations %}
+        <option value="{{ i.id }}">{{ i.name }} ({{ i.kind.value }})</option>
+      {% endfor %}
+    </select>
+
+    <label for="item_id">Item id (issue number / Jira key / Plane id)</label>
+    <input id="item_id" name="item_id" placeholder="e.g. 9213 or ENG-42" required>
+
+    <label for="intake_mode">Intake mode</label>
+    <select id="intake_mode" name="intake_mode">
+      {% for m in modes %}<option value="{{ m }}">{{ m }}</option>{% endfor %}
+    </select>
+    <p class="muted" style="font-size:.85rem">
+      <strong>raw_to_spec</strong>: PM converts the issue to a spec, then the build team runs.
+      <strong>spec_ready</strong>: the issue body already is a spec (JSON) — skip PM.
+      <strong>raw_to_dev</strong>: feed the raw issue straight to the build team — skip PM.
+    </p>
+
+    <p style="margin-top:1rem"><button class="btn" type="submit">Start run</button></p>
+  </form>
+</div>
+{% endblock %}

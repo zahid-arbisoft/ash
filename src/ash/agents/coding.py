@@ -19,7 +19,7 @@ from ash.clients.pr import create_pr
 from ash.config.settings import load_project
 from ash.gates import ApprovalGate
 from ash.graph.state import WorkflowState
-from ash.schemas import CodeChange, EditAction, ImplementationPlan, Spec
+from ash.schemas import CodeChange, EditAction, ImplementationPlan
 
 _SYSTEM = """You are a senior engineer implementing a planned change. You are given the spec, the \
 implementation plan, and the current contents of the relevant files. Produce the MINIMAL set of \
@@ -39,17 +39,17 @@ class CodingAgent(BaseAgent):
 
     async def run(self, state: WorkflowState) -> dict[str, Any]:
         plan = state.research.plan
-        spec = state.pm.spec
+        brief = state.brief()
         wt = state.research.worktree_path
         branch = state.research.branch
-        if plan is None or spec is None or wt is None or branch is None:
+        if plan is None or not brief or wt is None or branch is None:
             return {"coding": {"note": "skipped: no plan/worktree from research"}}
 
         project = load_project(state.project)
         wt_path = Path(wt)
         ws = RepoWorkspace(project.work, project.runtime_dir / "worktrees")
         try:
-            change = await self._code(wt_path, spec, plan)
+            change = await self._code(wt_path, brief, plan)
             if not change.edits:
                 return {"coding": {"change": change, "note": "no edits produced; needs human"}}
 
@@ -59,7 +59,7 @@ class CodingAgent(BaseAgent):
             await asyncio.to_thread(ws.push_branch, wt_path, branch)
 
             body = (
-                f"Implements {project.issues.source_repo}#{state.item_id} — {state.issue_url}\n\n"
+                f"Implements item {state.item_id} — {state.issue_url}\n\n"
                 f"{change.summary}\n\n"
                 f"**Files changed:** {', '.join(written)}\n\n"
                 f"**Tests:** {change.tests_note or 'n/a'}\n\n"
@@ -95,7 +95,7 @@ class CodingAgent(BaseAgent):
             except Exception:  # noqa: BLE001 — cleanup is best-effort
                 pass
 
-    async def _code(self, worktree: Path, spec: Spec, plan: ImplementationPlan) -> CodeChange:
+    async def _code(self, worktree: Path, brief: str, plan: ImplementationPlan) -> CodeChange:
         targets = (plan.relevant_files + plan.new_files)[:_MAX_FILES]
         current = []
         for rel in targets:
@@ -103,7 +103,7 @@ class CodingAgent(BaseAgent):
             current.append(f"### {rel}\n```\n{body or '(file does not exist yet)'}\n```")
 
         user = (
-            f"## Spec\n{spec.model_dump_json(indent=2)}\n\n"
+            f"## Work brief\n{brief}\n\n"
             f"## Implementation plan\n{plan.model_dump_json(indent=2)}\n\n"
             "## Current file contents\n" + ("\n\n".join(current) or "(none provided)") + "\n\n"
             "Produce the code change (full file contents for each edit)."

@@ -1,7 +1,7 @@
 from ash.agents.pm import PMAgent
-from ash.clients.github import Issue
 from ash.config.settings import Settings
 from ash.graph.state import WorkflowState
+from ash.integrations.base import RawIssue
 from ash.schemas import Epic, Spec, TechnicalSpec
 
 
@@ -16,14 +16,6 @@ def _spec() -> Spec:
         technical_spec=TechnicalSpec(approach="add endpoint", testing_strategy="unit"),
         tickets=[],
     )
-
-
-class FakeGitHub:
-    async def get_issue(self, item_id):
-        return Issue(number=int(item_id), title="Add export", body="CSV please", url="u")
-
-    async def post_comment(self, item_id, body):
-        return "https://gh/comment/7"
 
 
 class _Structured:
@@ -42,23 +34,23 @@ class FakeModel:
         return _Structured(self._result)
 
 
-async def test_pm_reads_issue_generates_spec_publishes_board(monkeypatch):
+async def test_pm_generates_spec_from_raw_issue_and_publishes_board(monkeypatch):
     spec = _spec()
     published = {}
 
     class FakeBoard:
-        def publish_spec(self, number, url, s):
-            published.update(number=number, url=url, spec=s)
+        def publish_spec(self, item_id, url, s):
+            published.update(item_id=item_id, url=url, spec=s)
             return "board-ref-1"
 
     monkeypatch.setattr("ash.agents.pm.get_board", lambda _dir: FakeBoard())
 
-    agent = PMAgent(Settings(), model=FakeModel(spec), github=FakeGitHub())
+    agent = PMAgent(Settings(), model=FakeModel(spec))
     state = WorkflowState(run_id="r1", project="plane", item_id="42")
+    state.raw_issue = RawIssue(id="42", title="Add export", body="CSV please", source="github")
 
     update = await agent.run(state)
 
     assert update["pm"]["spec"] is spec
     assert update["pm"]["board_ref"] == "board-ref-1"
-    assert update["issue_title"] == "Add export"
-    assert published["number"] == 42
+    assert published["item_id"] == "42"

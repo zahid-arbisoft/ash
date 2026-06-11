@@ -29,9 +29,8 @@ services:
       postgres:
         condition: service_healthy
     volumes:
+      # bind-mount the whole project so runtime/ (board specs, state, worktrees) is visible on the host
       - .:/app
-      - ash-runtime:/app/runtime
 
 volumes:
   ash-postgres:
-  ash-runtime:

@@ -33,7 +33,7 @@ client/target #1; SaaS packaging is a later layer that must not change the agent
 
 ## Environment notes
 - LLM is provider-agnostic via a **LangChain** factory. For a **LiteLLM gateway** (`/v1`) use
-  `LLM__PROVIDER=openai` + `LLM_BASE_URL=...` (NOT `anthropic`). Per-agent overrides via
+  `LLM_PROVIDER=openai` + `LLM_BASE_URL=...` (NOT `anthropic`). Per-agent overrides via
   `AGENT_<NAME>__MODEL`. Agents force structure via `.with_structured_output`.
 - `gh` CLI is authenticated as `zahid-arbisoft`. **Git auth = HTTPS via gh** (`gh auth setup-git`);
   the engine fetches/pushes over the HTTPS URL, NOT the clone's SSH origin (no ssh-agent headless).
@@ -43,19 +43,23 @@ client/target #1; SaaS packaging is a later layer that must not change the agent
   isn't installed locally and the old 3.14 venv can't take the langchain/langgraph wheels. Engine is
   editable-installed (`pip install -e .[dev]`). Commands live in the `justfile` (`just --list`).
 - **Architecture:** single package `src/ash/` (no Django). Entry = **FastAPI** (`src/ash/api`,
-  `POST /runs` / `GET /runs/{id}`); orchestration = **LangGraph** (`src/ash/graph`); run state of
-  record = **Postgres checkpointer** (AsyncPostgresSaver). Tools are 3-layer: `clients/` →
-  `toolkits/` → agents. Config is hybrid: `pydantic-settings` + `projects/<name>.yaml`. `config`
-  finds repo root via `projects/`/`pyproject.toml` (or `ASH_ROOT`). Quality gates: ruff + **mypy
-  --strict** + pytest, enforced in CI (`.github/workflows/ci.yml`) + pre-commit.
+  `POST /runs` / `GET /runs/{id}`); orchestration = **LangGraph** (`src/ash/graph`, conditional
+  intake routing); run state = **Postgres checkpointer** (AsyncPostgresSaver). App DB = **SQLAlchemy
+  async** (`src/ash/db`) for integrations + run registry; secrets **encrypted at rest** (Fernet via
+  `db/crypto.EncryptedString`, key = `SECRET_KEY`). Issue sources = pluggable **integrations**
+  (`src/ash/integrations`: GitHub/Jira/Plane behind `IssueProvider`). FE = **Jinja2** at `/`
+  (`src/ash/web`); admin = **SQLAdmin** at `/admin` (`src/ash/admin`, env creds). Per-run
+  `intake_mode` (`raw_to_spec`/`spec_ready`/`raw_to_dev`) routes use/skip PM. Tools are 3-layer:
+  `clients/` → `toolkits/` → agents. Config is hybrid: `pydantic-settings` + `projects/<name>.yaml`.
+  Quality gates: ruff + **mypy --strict** + pytest, enforced in CI + pre-commit.
 
 ## Current status
 - **Re-architected (2026-06-11)** to FastAPI + async + LangGraph + Postgres + LangChain (decisions
-  #15–#18; #14 Django removed). Graph: PM→Research→Coding→Reviewer→Fixer→Merge over a namespaced
-  `WorkflowState`, checkpointed in Postgres, served over FastAPI. PM/Research/Coding are real;
-  Reviewer/Fixer are stubs.
-- Verified: ruff clean, **mypy --strict clean (36 files)**, **30 pytest tests green**, FastAPI + CLI
-  boot. Live Postgres/LLM runs pending real `.env` credentials.
-- **Open follow-ups:** real Reviewer (maker/checker separation), bounded Fixer loop, move worktree
-  cleanup from Coding→Merge once Reviewer/Fixer are real, deferred post-comment, deepen code grounding
-  (don't trust generated code yet). Keep human gates until each layer earns removal.
+  #15–#18; #14 Django removed), then added **integrations + admin + UI** (decision #19): pluggable
+  GitHub/Jira/Plane issue sources, per-run intake routing (Intake→[PM?]→Research→Coding→Reviewer→
+  Fixer→Merge), SQLAdmin at `/admin`, Jinja2 UI at `/`. PM/Research/Coding real; Reviewer/Fixer stubs.
+- Verified: ruff clean, **mypy --strict clean (54 files)**, **39 pytest tests green**, app/UI/admin
+  import. Live Postgres/LLM/Jira/Plane runs pending real `.env` credentials.
+- **Open follow-ups:** Alembic migrations (tables are `create_all` now), wire comment-back into a
+  node, real Reviewer (maker/checker), bounded Fixer loop, move worktree cleanup Coding→Merge,
+  deepen code grounding (don't trust generated code yet). Keep human gates until each layer earns it.

@@ -318,7 +318,8 @@ with it, so a teammate could point the loop at a new repo at any phase boundary.
 | 15 | **Web framework = FastAPI; orchestration = LangGraph; run state = Postgres checkpointer** | The entrypoint is an async **FastAPI** app (`POST /runs` → `run_id`, background task; `GET /runs/{id}` reads checkpointer state). The pipeline is a **LangGraph** `StateGraph` (PM→Research→Coding→Reviewer→Fixer→Merge) over one **namespaced** `WorkflowState`, persisted by the **AsyncPostgresSaver** keyed on `thread_id`=`run_id`. Replaces the hand-rolled sync `pipeline.py`. |
 | 16 | **Engine is async; LLM via LangChain** | All agent/graph/client code is `async`; blocking git/subprocess calls run in `asyncio.to_thread`. The provider-agnostic LLM is a **LangChain** chat model (`ChatAnthropic`/`ChatOpenAI`, `base_url` for LiteLLM/Ollama/vLLM); agents force structure via `.with_structured_output(schema)`. Replaces the hand-rolled `LLMClient`. |
 | 17 | **Layout = `src/` single package; config = hybrid** | Best-practice `src/ash/` single package (`api/`, `agents/`, `graph/`, `clients/`, `toolkits/`, `llm/`, `config/`). Tools are 3-layered: `clients/` → `toolkits/` (`BaseTool`) → agents. Config is **hybrid**: `pydantic-settings` `Settings` for engine secrets + per-agent model overrides, **plus** `projects/<name>.yaml` for the multi-tenant per-engagement layer (design rule #1 preserved). |
-| 18 | **Agent roster kept; Reviewer/Fixer stubbed; quality gates hardened** | We keep ASH's PM/Research/Coding (real) and add Reviewer/Fixer as `BaseAgent` stubs (Phases 2–3). With no local clone, Research/Coding skip gracefully so a PM-only run completes. **mypy --strict** is enforced in CI (ruff → mypy → pytest); Python ≥3.12. Posting the spec back as an issue comment is deferred (the `BoardToolkit.post_board_comment` seam exists). |
+| 18 | **Agent roster kept; Reviewer/Fixer stubbed; quality gates hardened** | We keep ASH's PM/Research/Coding (real) and add Reviewer/Fixer as `BaseAgent` stubs (Phases 2–3). With no local clone, Research/Coding skip gracefully so a PM-only run completes. **mypy --strict** is enforced in CI (ruff → mypy → pytest); Python ≥3.12. Posting the spec back as an issue comment is deferred (the `post_comment` seam exists). |
+| 19 | **Pluggable issue-source integrations + per-run intake routing + admin/UI** | Issue sources (GitHub / Jira / Plane) are DB-backed `Integration` rows behind one `IssueProvider` interface; secrets **encrypted at rest** (Fernet). A per-run **intake_mode** (`raw_to_spec` / `spec_ready` / `raw_to_dev`) drives a LangGraph **conditional edge** that uses or skips PM. App DB = **SQLAlchemy 2.0 async** (same Postgres); admin = **SQLAdmin** at `/admin` (env-credentialed); FE = **Jinja2** UI at `/`. New sources = new provider, no graph/agent changes. |
 
 ### 7a. Repo topology — configurable per project
 
@@ -432,8 +433,12 @@ The engine reads **no hardcoded repo names**. Everything Plane-specific is data.
 ash/                             # repo root
 ├── src/ash/                     # the ENGINE — single installable package
 │   ├── api/                     # FastAPI app + routes (POST /runs, GET /runs/{id}) + lifespan
-│   ├── agents/                  # BaseAgent + pm/research/coding (real) + reviewer/fixer (stubs)
-│   ├── graph/                   # state (namespaced), nodes, checkpointer, builder, runner
+│   ├── web/                     # Jinja2 UI (dashboard, integrations, start/track runs)
+│   ├── admin/                   # SQLAdmin portal at /admin + auth backend
+│   ├── agents/                  # BaseAgent + intake + pm/research/coding + reviewer/fixer (stubs)
+│   ├── graph/                   # state (namespaced), nodes, checkpointer, builder (conditional), runner
+│   ├── integrations/            # IssueProvider + GitHub/Jira/Plane + registry/service
+│   ├── db/                      # SQLAlchemy async (base/session), EncryptedString, models
 │   ├── clients/                 # async github, git_repo (worktrees), pr (gh), board, code_intel
 │   ├── toolkits/                # LangChain @tool wrappers (board, codebase) over clients
 │   ├── llm/factory.py           # provider-agnostic chat model (Anthropic / OpenAI-compatible)
@@ -506,6 +511,85 @@ Don't remove a gate until the thing under it has earned it.
 ## 11. Changelog
 
 Per the working agreement (top of doc), every decision/implementation change is logged here.
+
+- **2026-06-11 — Fix: board specs invisible on host (docker-compose runtime volume).** A named
+  volume `ash-runtime:/app/runtime` shadowed the project bind mount, so PM board files
+  (`runtime/<proj>/board/issue-*.md`) were written into the Docker volume, not the host `./runtime`.
+  Dropped the named volume; `runtime/` now lives under the `.:/app` bind mount and is visible on the
+  host. (Recreate the container — `docker compose up -d` — for the volume change to take effect.)
+
+- **2026-06-11 — Fix: `TypeError: Object of type Spec is not JSON serializable` on run status.** Once
+  PM produced a real `Spec`, LangGraph handed `get_run` a namespace dict still wrapping the `Spec`
+  object; the previous normalizer only `model_dump()`ed top-level pydantic values, so the `Spec`
+  leaked into `json.dumps` (UI `tojson` / API response). `Runner.get_run` now deep-converts via
+  `pydantic_core.to_jsonable_python` (enums→values, datetimes→iso, models→dicts), guaranteeing a
+  JSON-safe payload. Added a regression test. ruff + mypy --strict clean, 46 tests green.
+
+- **2026-06-11 — Docs: `docs/configuration.md` env/model reference.** Complete table of every env var
+  (LLM provider/model/keys/base_url, per-agent `AGENT_*__MODEL` overrides, DB, `SECRET_KEY`, admin,
+  `LOCAL_REPO_PATH`, `ASH_ROOT`), how the per-agent model is resolved, working `.env` examples
+  (LiteLLM gateway / native Anthropic / per-agent), and a troubleshooting checklist mapping the
+  common gateway errors (missing key, `token_not_found`, `key_model_access_denied`) to fixes. Linked
+  from the README. Also: openai/gateway path sends a placeholder key when none is set (gateways that
+  don't check keys), and uses `max_tokens` explicitly to avoid a runtime warning.
+
+- **2026-06-11 — Fix: LLM env vars are flat (`LLM_PROVIDER`, not `LLM__PROVIDER`).** The global LLM
+  config was nested under an `llm` object, so `LLM_PROVIDER` (single underscore) was silently ignored
+  and the provider fell back to `anthropic` (causing a confusing "Could not resolve authentication
+  method" / `ANTHROPIC_API_KEY` error even with `LLM_PROVIDER=openai` set). Flattened to
+  `llm_provider`/`llm_model`/`llm_temperature`/`llm_max_tokens` (read from `LLM_PROVIDER`/`LLM_MODEL`/
+  …); per-agent overrides stay nested (`AGENT_PM__MODEL`). Also: clearer "no LLM credentials" errors
+  in the factory, and Research now **skips** (clean note) when the configured clone path is
+  missing/not mounted instead of raising `FileNotFoundError`. Updated `.env.example`, README, CLAUDE,
+  tests (hermetic via `_env_file=None`). ruff + mypy --strict clean, 45 tests green.
+
+- **2026-06-11 — Docs: `docs/integrations.md` how-to.** Step-by-step guide for adding GitHub / Jira /
+  Plane integrations (prereqs, admin-portal fields per provider, token scopes, item-id meaning,
+  intake modes, programmatic seeding, security & troubleshooting). Linked from the README.
+
+- **2026-06-11 — Fix: admin "add integration" crash (sqladmin/wtforms boolean widget).** Rendering
+  the `enabled` checkbox raised `AttributeError: 'BooleanInputWidget' object has no attribute
+  'validation_attrs'` — sqladmin 0.27.2's `BooleanInputWidget` subclasses wtforms' base `Input`, but
+  wtforms ≥3.2 defines `validation_attrs` only on concrete subclasses. Added `admin/_compat.py` (a
+  no-op-once-fixed shim that restores the attribute), imported by `ash.admin`. Regression test
+  reproduces the crash and verifies the fix. ruff + mypy --strict clean (57 files), 44 tests green.
+
+- **2026-06-11 — DB-backed admin users (create via CLI/justfile).** Added an `AdminUser` table
+  (PBKDF2-SHA256 hashes, stdlib — no new deps) + `admin/security.py` (`hash_password`/
+  `verify_password`) + `admin/users.py` (create-or-update / authenticate). `AdminAuth.login` now
+  checks DB users first, falling back to the env `ADMIN_USER`/`ADMIN_PASSWORD` bootstrap user. New
+  `ash create-admin --username … [--password …]` CLI (prompts via getpass when omitted) and a
+  `just create-admin <user>` recipe. Read-only `AdminUser` view added to the portal (creation stays
+  in the CLI so passwords are always hashed). Verified: ruff + mypy --strict clean (56 files), 43
+  tests green (hash roundtrip + create/authenticate over sqlite).
+
+- **2026-06-11 — Integrations, admin portal & Jinja2 UI (decision #19).** Added a pluggable
+  **issue-source integrations** layer + an app DB + a server-rendered UI + an admin portal.
+  - **App DB (SQLAlchemy 2.0 async):** new `src/ash/db` (`base` engine/sessionmaker from the same
+    Postgres DSN via `postgresql+psycopg`, `init_db` create_all, `crypto.EncryptedString` Fernet
+    column type, `models`: `Integration` + `RunRecord`). Tables created on startup (Alembic is a
+    later hardening step). Integration **secrets are encrypted at rest** (Fernet key from
+    `Settings.secret_key`).
+  - **Integrations (`src/ash/integrations`):** `IssueProvider` protocol + normalized `RawIssue`;
+    full **GitHub / Jira / Plane** providers over httpx (Jira ADF→text, Basic auth; Plane
+    `X-API-Key`); `registry` (row→provider) + `service` (CRUD + `provider_for`). New sources = new
+    provider + `ProviderKind`, no agent/graph changes (realizes the §8 Trigger seam).
+  - **Intake routing (per-run, decision #19):** new **IntakeAgent** front node resolves the
+    integration (or legacy GitHub fallback) → `RawIssue`. `WorkflowState` gains `intake_mode`
+    (`raw_to_spec | spec_ready | raw_to_dev`), `integration_id`, `raw_issue`, and a `brief()` helper.
+    A LangGraph **conditional edge** routes: `raw_to_spec`→PM→build; `spec_ready` (spec parsed at
+    intake) and `raw_to_dev`→build, skipping PM. PM now consumes `raw_issue`; Research/Coding work
+    from `brief()` (spec or raw). Board sink keys on a string item id (Jira keys, etc.).
+  - **Admin + UI:** **SQLAdmin** at `/admin` (Integration + Run views) behind an env-credentialed
+    `AuthenticationBackend`; **Jinja2** UI at `/` (dashboard, integrations list, start-run form with
+    integration + intake-mode pickers, run status). API `RunRequest` gains `intake_mode` +
+    `integration_id`; lifespan runs `init_db()` + mounts admin. New deps: sqlalchemy[asyncio],
+    sqladmin, cryptography, jinja2, python-multipart, itsdangerous (+ aiosqlite dev).
+  - **Verified:** ruff clean, **mypy --strict clean (54 files)**, **39 pytest tests green** (provider
+    parsing via httpx MockTransport, Fernet encryption-at-rest over sqlite, intake conditional
+    routing for all three modes, app/UI/admin import). Live Postgres/Jira/Plane runs pending real
+    credentials. **Follow-ups:** Alembic migrations (tables are `create_all` today), per-integration
+    comment-back wired into a node, real Reviewer/Fixer.
 
 - **2026-06-11 — Re-architecture to the boilerplate-spec stack (FastAPI + async + LangGraph +
   Postgres + LangChain).** Adopted the AI-PM-Engineering boilerplate spec (now under

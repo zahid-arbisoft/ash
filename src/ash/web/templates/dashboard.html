@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}Dashboard{% endblock %}
+{% block body %}
+<h1>Dashboard</h1>
+
+<div class="card">
+  <h2>Integrations ({{ integrations|length }})</h2>
+  {% if integrations %}
+    <table>
+      <tr><th>Name</th><th>Kind</th><th>Enabled</th></tr>
+      {% for i in integrations %}
+        <tr><td>{{ i.name }}</td><td><span class="pill">{{ i.kind.value }}</span></td><td>{{ "✓" if i.enabled else "—" }}</td></tr>
+      {% endfor %}
+    </table>
+  {% else %}
+    <p class="muted">No integrations yet. Add one in the <a href="/admin" target="_blank">Admin portal</a>.</p>
+  {% endif %}
+</div>
+
+<div class="card">
+  <h2>Recent runs</h2>
+  {% if runs %}
+    <table>
+      <tr><th>Run</th><th>Project</th><th>Item</th><th>Mode</th><th>When</th></tr>
+      {% for r in runs %}
+        <tr>
+          <td><a href="/ui/runs/{{ r.run_id }}">{{ r.run_id[:8] }}</a></td>
+          <td>{{ r.project }}</td><td>{{ r.item_id }}</td>
+          <td><span class="pill">{{ r.intake_mode }}</span></td>
+          <td class="muted">{{ r.created_at.strftime("%Y-%m-%d %H:%M") }}</td>
+        </tr>
+      {% endfor %}
+    </table>
+  {% else %}
+    <p class="muted">No runs yet.</p>
+  {% endif %}
+  <p style="margin-top:1rem"><a class="btn" href="/ui/runs/new">Start a run</a></p>
+</div>
+{% endblock %}

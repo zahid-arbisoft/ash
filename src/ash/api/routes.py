@@ -20,7 +20,11 @@ def _runner(request: Request) -> Runner:
 @router.post("/runs", status_code=status.HTTP_202_ACCEPTED, response_model=RunAccepted)
 async def start_run(req: RunRequest, request: Request) -> RunAccepted:
     run_id = await _runner(request).start_run(
-        project=req.project, item_id=req.item_id, board=req.board
+        project=req.project,
+        item_id=req.item_id,
+        board=req.board,
+        intake_mode=req.intake_mode,
+        integration_id=req.integration_id,
     )
     return RunAccepted(run_id=run_id)
 

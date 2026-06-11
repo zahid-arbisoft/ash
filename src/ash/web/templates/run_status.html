@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}Run {{ run_id[:8] }}{% endblock %}
+{% block body %}
+<h1>Run <code>{{ run_id[:12] }}</code></h1>
+{% if state %}
+  <div class="card">
+    <p>Status: <span class="pill">{{ state.status }}</span>
+       · {{ state.project }} #{{ state.item_id }}
+       · <span class="pill">{{ state.intake_mode }}</span></p>
+    {% if state.status == "running" %}
+      <p class="muted">Still running — <a href="">refresh</a>.</p>
+    {% endif %}
+  </div>
+  <div class="card">
+    <h2>Per-agent state</h2>
+    {% for ns in ["intake", "pm", "research", "coding", "reviewer", "fixer"] %}
+      {% set sub = state[ns] %}
+      <p><strong>{{ ns }}</strong>:
+        {% if sub.get("error") %}<span class="pill">error</span> {{ sub.error }}
+        {% elif sub.get("note") %}{{ sub.note }}
+        {% else %}<span class="muted">—</span>{% endif %}
+        {% if sub.get("pr_url") %} · <a href="{{ sub.pr_url }}" target="_blank">PR</a>{% endif %}
+        {% if sub.get("board_ref") %} · board: <code>{{ sub.board_ref }}</code>{% endif %}
+      </p>
+    {% endfor %}
+  </div>
+  <details class="card"><summary class="muted">Raw state JSON</summary>
+    <pre>{{ state | tojson(indent=2) }}</pre>
+  </details>
+{% else %}
+  <div class="card"><p class="muted">No state yet (the run may still be starting). <a href="">Refresh</a>.</p></div>
+{% endif %}
+{% endblock %}

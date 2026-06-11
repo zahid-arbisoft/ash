@@ -31,6 +31,10 @@ list project="plane" limit="20":
 run project issue:
     {{run}} run --project {{project}} --issue {{issue}}
 
+# create (or reset) an admin-portal user; prompts for the password: just create-admin alice
+create-admin user:
+    {{run}} create-admin --username {{user}}
+
 # ── API ──
 # run the FastAPI app (needs Postgres up): http://127.0.0.1:8000/docs
 serve:
@@ -66,6 +70,9 @@ docker-up:
 
 docker-down:
     docker compose down
+
+docker-secret-key:
+    docker compose exec api python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 
 # ── misc ──
 clean:

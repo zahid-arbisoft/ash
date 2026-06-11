@@ -53,7 +53,7 @@ class LLMSettings(BaseModel):
 
 
 class AgentModelOverride(BaseModel):
-    """Per-agent overrides; any unset field falls back to the global `llm` default."""
+    """Per-agent overrides; any unset field falls back to the global LLM default."""
 
     provider: str | None = None
     model: str | None = None
@@ -77,8 +77,20 @@ class Settings(BaseSettings):
     llm_base_url: str | None = None  # global openai-compatible endpoint override
     postgres_dsn: str = "postgresql://ash:ash@localhost:5432/ash"
 
-    # llm global default + per-agent overrides
-    llm: LLMSettings = LLMSettings()
+    # app DB secret encryption (Fernet key) + admin portal auth.
+    # generate a key:
+    #   python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+    secret_key: str = ""
+    admin_user: str = "admin"
+    admin_password: str = "admin"  # noqa: S105 — dev default; override in .env
+
+    # llm global default (flat env vars: LLM_PROVIDER, LLM_MODEL, LLM_TEMPERATURE, LLM_MAX_TOKENS)
+    llm_provider: str = "anthropic"  # "anthropic" | "openai" (openai = any OpenAI-compatible host)
+    llm_model: str = "claude-sonnet-4-6"
+    llm_temperature: float = 0.0
+    llm_max_tokens: int = 8192
+
+    # per-agent overrides (nested: AGENT_PM__MODEL, AGENT_REVIEWER__PROVIDER, …)
     agent_pm: AgentModelOverride = Field(default_factory=AgentModelOverride)
     agent_research: AgentModelOverride = Field(default_factory=AgentModelOverride)
     agent_coding: AgentModelOverride = Field(default_factory=AgentModelOverride)
@@ -91,15 +103,15 @@ class Settings(BaseSettings):
     def model_for(self, agent: AgentName) -> LLMSettings:
         override: AgentModelOverride = getattr(self, f"agent_{agent}")
         return LLMSettings(
-            provider=override.provider or self.llm.provider,
-            model=override.model or self.llm.model,
+            provider=override.provider or self.llm_provider,
+            model=override.model or self.llm_model,
             temperature=(
-                override.temperature if override.temperature is not None else self.llm.temperature
+                override.temperature if override.temperature is not None else self.llm_temperature
             ),
             max_tokens=(
-                override.max_tokens if override.max_tokens is not None else self.llm.max_tokens
+                override.max_tokens if override.max_tokens is not None else self.llm_max_tokens
             ),
-            base_url=self.llm.base_url or self.llm_base_url,
+            base_url=self.llm_base_url,
         )
 
     def api_key_for(self, provider: str) -> str:

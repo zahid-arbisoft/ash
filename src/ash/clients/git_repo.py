@@ -78,6 +78,9 @@ class RepoWorkspace:
     def branch_name(self, issue_number: int, title: str) -> str:
         return f"agent/issue-{issue_number}-{_slug(title)}"
 
+    def branch_name_from(self, item_id: str, title: str) -> str:
+        return f"agent/issue-{_slug(item_id)}-{_slug(title)}"
+
     # ── commit / push (operate inside the worktree) ─────────────────────────────
 
     def commit_all(self, wt_path: Path, message: str) -> str:

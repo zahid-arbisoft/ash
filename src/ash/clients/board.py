@@ -14,7 +14,7 @@ from ..schemas import Spec
 
 
 class Board(Protocol):
-    def publish_spec(self, issue_number: int, issue_url: str, spec: Spec) -> str:
+    def publish_spec(self, item_id: str, issue_url: str, spec: Spec) -> str:
         """Publish a spec/tickets to the board. Returns a reference (path/URL/id)."""
         ...
 
@@ -26,16 +26,17 @@ class FileBoard:
         self.board_dir = board_dir
         self.board_dir.mkdir(parents=True, exist_ok=True)
 
-    def publish_spec(self, issue_number: int, issue_url: str, spec: Spec) -> str:
-        (self.board_dir / f"issue-{issue_number}.json").write_text(spec.model_dump_json(indent=2))
-        md_path = self.board_dir / f"issue-{issue_number}.md"
-        md_path.write_text(self._render_md(issue_number, issue_url, spec))
+    def publish_spec(self, item_id: str, issue_url: str, spec: Spec) -> str:
+        safe = str(item_id).replace("/", "_")
+        (self.board_dir / f"issue-{safe}.json").write_text(spec.model_dump_json(indent=2))
+        md_path = self.board_dir / f"issue-{safe}.md"
+        md_path.write_text(self._render_md(item_id, issue_url, spec))
         return str(md_path)
 
     @staticmethod
-    def _render_md(issue_number: int, issue_url: str, spec: Spec) -> str:
+    def _render_md(item_id: str, issue_url: str, spec: Spec) -> str:
         lines = [
-            f"# [{spec.epic.title}](#) — issue #{issue_number}",
+            f"# [{spec.epic.title}](#) — item {item_id}",
             "",
             f"Source: {issue_url}",
             "",

@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import asyncio
 import uuid
-from typing import Any
+from typing import Any, cast
+
+from pydantic_core import to_jsonable_python
 
 from ash.graph.state import WorkflowState
 
@@ -23,10 +25,24 @@ class Runner:
         return {"configurable": {"thread_id": thread_id}}
 
     async def start_run(
-        self, *, project: str, item_id: str, board: str = "github", wait: bool = False
+        self,
+        *,
+        project: str,
+        item_id: str,
+        board: str = "github",
+        intake_mode: str = "raw_to_spec",
+        integration_id: int | None = None,
+        wait: bool = False,
     ) -> str:
         run_id = uuid.uuid4().hex
-        initial = WorkflowState(run_id=run_id, project=project, item_id=item_id, board=board)
+        initial = WorkflowState(
+            run_id=run_id,
+            project=project,
+            item_id=item_id,
+            board=board,
+            intake_mode=intake_mode,  # type: ignore[arg-type]
+            integration_id=integration_id,
+        )
 
         async def _invoke() -> None:
             await self._graph.ainvoke(initial, config=self._config(run_id))
@@ -43,8 +59,7 @@ class Runner:
         snapshot = await self._graph.aget_state(self._config(run_id))
         if not snapshot or not snapshot.values:
             return None
-        values = snapshot.values
-        if isinstance(values, dict):
-            return values
-        dumped: dict[str, Any] = values.model_dump()
-        return dumped
+        # LangGraph may hand back namespaces as pydantic instances, as dicts, or as dicts that still
+        # wrap pydantic objects (e.g. a Spec inside `pm`). Deep-convert to JSON-safe primitives
+        # (enums -> values, datetimes -> iso, models -> dicts) so the API and the UI's tojson work.
+        return cast(dict[str, Any], to_jsonable_python(snapshot.values))

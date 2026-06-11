@@ -15,7 +15,7 @@ class StubAgent:
 
 
 def _agents():
-    return {n: StubAgent(n) for n in ("pm", "research", "coding", "reviewer", "fixer")}
+    return {n: StubAgent(n) for n in ("intake", "pm", "research", "coding", "reviewer", "fixer")}
 
 
 def _as_dict(result):

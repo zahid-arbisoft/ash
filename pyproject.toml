@@ -18,6 +18,13 @@ dependencies = [
     "httpx>=0.27",
     "GitPython>=3.1.43",
     "python-dotenv>=1.0.1",
+    # app DB + admin + UI
+    "sqlalchemy[asyncio]>=2.0",
+    "sqladmin>=0.20",
+    "cryptography>=43.0",
+    "jinja2>=3.1",
+    "python-multipart>=0.0.9",
+    "itsdangerous>=2.2",
 ]
 
 [project.optional-dependencies]
@@ -27,6 +34,7 @@ dev = [
     "ruff>=0.7",
     "mypy>=1.13",
     "types-PyYAML>=6.0",
+    "aiosqlite>=0.20",
 ]
 
 [project.scripts]
@@ -66,7 +74,7 @@ mypy_path = "src"
 packages = ["ash"]
 # third-party libs without bundled type stubs
 [[tool.mypy.overrides]]
-module = ["git", "git.*", "langgraph.*", "langchain_anthropic.*", "langchain_openai.*"]
+module = ["git", "git.*", "langgraph.*", "langchain_anthropic.*", "langchain_openai.*", "sqladmin.*"]
 ignore_missing_imports = true
 
 # ── pytest ──

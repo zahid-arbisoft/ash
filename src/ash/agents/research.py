@@ -1,8 +1,9 @@
 """Research / Spike agent (read-only) — grounds a plan in the actual repo, in a git worktree.
 
 Sets up the per-ticket worktree (parallel-safety primitive), orients the model with a shallow repo
-tree + ripgrep hits, and produces a grounded `ImplementationPlan`. No writes happen here. If the
-project has no local clone configured, it records a skip note so a PM-only run still completes.
+tree + ripgrep hits, and produces a grounded `ImplementationPlan`. Works from the PM spec when one
+exists, or directly from the raw issue (`raw_to_dev`). No writes happen here. With no local clone
+configured it records a skip note so a PM-only run still completes.
 """
 
 from __future__ import annotations
@@ -17,13 +18,13 @@ from ash.clients import code_intel
 from ash.clients.git_repo import RepoWorkspace
 from ash.config.settings import load_project
 from ash.graph.state import WorkflowState
-from ash.schemas import ImplementationPlan, Spec
+from ash.schemas import ImplementationPlan
 
-_SYSTEM = """You are a senior engineer doing a research spike. Given a spec and a real view of the \
-repository, produce a concrete, grounded implementation plan. Reference ACTUAL files/paths you see \
-in the provided repo overview and search hits. Prefer the smallest change that satisfies the spec. \
-Do not invent files that aren't plausible for this codebase. List open questions instead of \
-guessing."""
+_SYSTEM = """You are a senior engineer doing a research spike. Given the work brief and a real \
+view of the repository, produce a concrete, grounded implementation plan. Reference ACTUAL \
+files/paths you see in the provided repo overview and search hits. Prefer the smallest change \
+that satisfies the brief. Do not invent files that aren't plausible for this codebase. List open \
+questions instead of guessing."""
 
 _STOP = {
     "the",
@@ -45,26 +46,28 @@ class ResearchAgent(BaseAgent):
     name = "research"
 
     async def run(self, state: WorkflowState) -> dict[str, Any]:
-        spec = state.pm.spec
-        if spec is None:
-            return {"research": {"note": "skipped: no spec from PM"}}
+        brief = state.brief()
+        if not brief:
+            return {"research": {"note": "skipped: no spec or raw issue to work from"}}
 
         project = load_project(state.project)
-        if project.work.resolved_local_path() is None:
+        local = project.work.resolved_local_path()
+        if local is None or not local.exists():
             return {
                 "research": {
-                    "note": "skipped: no local clone configured "
-                    "(set work.local_repo_path or LOCAL_REPO_PATH)"
+                    "note": "skipped: no local clone available "
+                    f"(set work.local_repo_path or LOCAL_REPO_PATH to a clone of "
+                    f"{project.work.target_repo})"
                 }
             }
 
         ws = RepoWorkspace(project.work, project.runtime_dir / "worktrees")
         await asyncio.to_thread(ws.ensure_upstream)
         base_ref = await asyncio.to_thread(ws.sync_base)
-        branch = ws.branch_name(int(state.item_id), state.issue_title)
+        branch = ws.branch_name_from(state.item_id, state.issue_title)
         wt_path = await asyncio.to_thread(ws.create_worktree, branch, base_ref)
 
-        plan = await self._plan(wt_path, state.issue_title, spec)
+        plan = await self._plan(wt_path, state, brief)
         return {
             "research": {
                 "plan": plan,
@@ -73,24 +76,28 @@ class ResearchAgent(BaseAgent):
             }
         }
 
-    async def _plan(self, worktree: Path, issue_title: str, spec: Spec) -> ImplementationPlan:
+    async def _plan(self, worktree: Path, state: WorkflowState, brief: str) -> ImplementationPlan:
         tree = await asyncio.to_thread(code_intel.repo_tree, worktree)
         hits: list[str] = []
-        for kw in _keywords(spec, issue_title):
+        for kw in _keywords(state):
             hits += await asyncio.to_thread(code_intel.search, worktree, kw, 8)
         hits = hits[:40]
 
         user = (
-            f"## Spec\n{spec.model_dump_json(indent=2)}\n\n"
+            f"## Work brief\n{brief}\n\n"
             f"## Repository overview (top levels)\n{tree}\n\n"
-            "## Search hits for issue keywords\n" + ("\n".join(hits) or "(none)") + "\n\n"
+            "## Search hits for keywords\n" + ("\n".join(hits) or "(none)") + "\n\n"
             "Produce the implementation plan."
         )
         return await self.generate(ImplementationPlan, system=_SYSTEM, user=user)
 
 
-def _keywords(spec: Spec, issue_title: str) -> list[str]:
-    text = f"{issue_title} {spec.epic.title} {spec.epic.summary}"
+def _keywords(state: WorkflowState) -> list[str]:
+    text = state.issue_title
+    if state.pm.spec is not None:
+        text = f"{text} {state.pm.spec.epic.title} {state.pm.spec.epic.summary}"
+    elif state.raw_issue is not None:
+        text = f"{text} {state.raw_issue.body}"
     words = re.findall(r"[A-Za-z][A-Za-z0-9_]{3,}", text.lower())
     seen: list[str] = []
     for w in words:

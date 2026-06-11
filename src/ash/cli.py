@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import getpass
 import json
 import sys
 
@@ -42,6 +43,17 @@ async def _run(project_name: str, issue: int) -> int:
     return 0
 
 
+async def _create_admin(username: str, password: str) -> int:
+    from ash.admin.users import create_or_update_admin
+    from ash.db.base import get_sessionmaker, init_db
+
+    await init_db()
+    async with get_sessionmaker()() as session:
+        await create_or_update_admin(session, username=username, password=password)
+    print(f"admin user '{username}' created/updated")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="ash", description="ASH — Agentic Software House engine")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -54,11 +66,20 @@ def main(argv: list[str] | None = None) -> int:
     p_run.add_argument("--project", required=True)
     p_run.add_argument("--issue", type=int, required=True)
 
+    p_admin = sub.add_parser("create-admin", help="create (or reset) an admin-portal user")
+    p_admin.add_argument("--username", required=True)
+    p_admin.add_argument("--password", default=None, help="omit to be prompted securely")
+
     args = parser.parse_args(argv)
     if args.command == "list":
         return asyncio.run(_list(args.project, args.limit))
     if args.command == "run":
         return asyncio.run(_run(args.project, args.issue))
+    if args.command == "create-admin":
+        password = args.password or getpass.getpass("Password: ")
+        if not password:
+            parser.error("password must not be empty")
+        return asyncio.run(_create_admin(args.username, password))
     parser.error(f"unknown command: {args.command}")
     return 2
 
