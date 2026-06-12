@@ -14,19 +14,25 @@ over **FastAPI**, with per-run state persisted in a **Postgres checkpointer**.
 
 ```
 integration ─► intake ─► (intake_mode?)
-   GitHub/Jira/Plane          ├─ raw_to_spec ─► PM spec ─► Board ─┐
-                              ├─ spec_ready  ─────────(spec)──────┤
-                              └─ raw_to_dev  ─────────────────────┤
-                                                                  ▼
+   GitHub/Jira/Plane          ├─ raw_to_spec ─► PM (raw → spec + tickets) ─► [review gate] ─┐
+                              ├─ spec_ready  ─► PM (spec → tickets)        ─► [review gate] ─┤
+                              └─ raw_to_dev  ─────────────────────────────────────────────────┤
+                                                                                              ▼
               worktree ─► Research ─► Coding ─► commit ─► PR (CODE) ─► Reviewer ─► Fixer ─► merge
 ```
 
 - **Issue sources are pluggable integrations** — GitHub, Jira, or Plane — stored in the DB (secrets
   encrypted at rest) and resolved behind one `IssueProvider` interface. Add a source = add a provider.
   See **[docs/integrations.md](docs/integrations.md)** for the step-by-step "how to add an integration" guide.
-- **Per-run intake mode** picks the path: `raw_to_spec` (PM converts the issue → spec), `spec_ready`
-  (the issue already is a spec — skip PM), or `raw_to_dev` (feed the raw issue straight to the build
-  team — skip PM). A LangGraph **conditional edge** routes accordingly.
+- **Per-run intake mode** determines PM's role and what the build team receives:
+  - `raw_to_spec` — PM receives raw requirements (issue text, uploaded docs) and produces a full
+    spec + implementation tickets. A **human review gate** lets you approve before tickets are pushed
+    to your task tool (Jira / Plane / file board).
+  - `spec_ready` — The issue/document is already a specification. PM reads it and extracts
+    implementation tickets (stories) without rewriting the spec from scratch. Same review gate applies.
+  - `raw_to_dev` — PM is skipped entirely. The raw issue content is handed straight to the build
+    team (Research → Coding → Review). Use when requirements are already unambiguous.
+  A LangGraph **conditional edge** routes accordingly.
 - **PM/Research/Coding are real; Reviewer/Fixer are stubs** behind the same `BaseAgent` contract.
   With no local clone configured, Research/Coding skip gracefully so a PM-only run still completes.
 - **Specs go to the Board; code goes to the PR** (kept strictly separate).
@@ -36,8 +42,8 @@ integration ─► intake ─► (intake_mode?)
 
 ## UI & admin
 
-- **Jinja2 UI at `/`** — dashboard, integrations list, a start-run form (pick integration + intake
-  mode), and live run status.
+- **Jinja2 UI at `/`** — dashboard, paginated runs list (`/ui/runs`), start-run form (pick
+  integration + intake mode), live run status with pretty spec view and approve/reject gate.
 - **Admin portal at `/admin`** (SQLAdmin) — CRUD for integrations (tokens encrypted via Fernet) and
   the run registry. Login uses DB-backed admin users (PBKDF2-hashed), with the `ADMIN_USER` /
   `ADMIN_PASSWORD` env user as a bootstrap fallback. Create admin users from the CLI:

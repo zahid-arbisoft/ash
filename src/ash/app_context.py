@@ -13,7 +13,7 @@ from langchain_core.language_models import BaseChatModel
 from ash.agents.coding import CodingAgent
 from ash.agents.fixer import FixerAgent
 from ash.agents.intake import IntakeAgent
-from ash.agents.pm import PMAgent
+from ash.agents.pm import PMAgent, PMPublishAgent
 from ash.agents.research import ResearchAgent
 from ash.agents.reviewer import ReviewerAgent
 from ash.config.settings import Settings
@@ -32,6 +32,7 @@ def build_agents(
     return {
         "intake": IntakeAgent(settings, provider=intake_provider),
         "pm": PMAgent(settings, model=pm_model),
+        "pm_publish": PMPublishAgent(settings),
         "research": ResearchAgent(settings),
         "coding": CodingAgent(settings),
         "reviewer": ReviewerAgent(settings),

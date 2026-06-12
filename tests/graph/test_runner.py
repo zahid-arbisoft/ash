@@ -27,8 +27,16 @@ class SpecPM:
         return {"pm": {"spec": spec, "board_ref": "r"}}
 
 
+class PMPublishStub:
+    name = "pm"
+
+    async def run(self, state):
+        return {}
+
+
 def _runner():
     agents = {n: StubAgent(n) for n in ("intake", "pm", "research", "coding", "reviewer", "fixer")}
+    agents["pm_publish"] = PMPublishStub()
     return Runner(graph=build_graph(agents, checkpointer=MemorySaver()))
 
 
@@ -48,6 +56,7 @@ async def test_get_run_unknown_returns_none():
 async def test_get_run_state_is_json_serializable_with_spec():
     agents = {n: StubAgent(n) for n in ("intake", "research", "coding", "reviewer", "fixer")}
     agents["pm"] = SpecPM()
+    agents["pm_publish"] = PMPublishStub()
     runner = Runner(graph=build_graph(agents, checkpointer=MemorySaver()))
     run_id = await runner.start_run(project="plane", item_id="42", wait=True)
     state = await runner.get_run(run_id)

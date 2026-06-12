@@ -56,14 +56,25 @@ client/target #1; SaaS packaging is a later layer that must not change the agent
 ## Current status
 - **Re-architected (2026-06-11)** to FastAPI + async + LangGraph + Postgres + LangChain; added
   **integrations + admin + UI** (decision #19), then **PM agent v2** (2026-06-12).
-- **PM v2:** ingests issue text and/or **uploaded files** (pdf/docx/md via `documents/reader.py` +
-  LangChain community loaders); raw→`Spec`→Board; **pushes tickets to a task sink** (`sinks/`:
-  file/Jira/Plane; DB `TaskSink` rows, per-run choice → admin default → file board); flags **spikes**
-  (`TicketType.spike` + `Ticket.needs_research`) for Research. `POST /uploads` + UI file picker.
-- **Planned next (see `docs/plan/agent_runtime_and_connectors_plan.md`):** adopt `create_agent` for
-  looping agents + `HumanInTheLoopMiddleware` (+ `/runs/{id}/resume`); migrate connectors to **MCP**
-  (Integration→Connector); MCP-backed Jira/Plane/Sheets sinks. `deepagents` deferred.
-- Verified: ruff clean, **mypy --strict clean (65 files)**, **58 pytest tests green**. Live
+- **PM v2 + HITL review gate (2026-06-15, decision #20):** PM is now two graph nodes — `pm`
+  (generate spec / extract tickets → board write → checkpoint) and `pm_publish` (calls
+  `langgraph.types.interrupt` → pauses → user reviews spec in UI → Approve/Reject → tickets pushed
+  to connector). `raw_to_spec` and `spec_ready` both route through PM; `raw_to_dev` skips PM.
+  `spec_ready` uses a distinct prompt ("extract tickets from pre-written spec") — the old brittle
+  JSON-parsing shortcut removed. Pretty tabbed spec view on run status page. Paginated `/ui/runs`.
+- **Connectors (unified):** one `Connector` model/table (`db/models.py`) replaces the old
+  `Integration`+`TaskSink`; `is_source`/`is_sink`/`is_default_sink` toggles let one row (e.g. Jira)
+  be both source and sink. Single `ConnectorAdmin` at `/admin`; UI at `/ui/connectors`. Run fields
+  `integration_id` (source) / `task_sink_id` (sink) now reference connector ids.
+- **Agent runtime (`docs/plan/agent_runtime_and_connectors_plan.md`):** **P0+P1 done** — all
+  structured agents run on LangChain **`create_agent`** via `BaseAgent.build_agent()`/`generate()`
+  (langchain 1.3.8 + langchain-mcp-adapters 0.3.0). **P4 mechanism done** — `Runner.resume_run` +
+  `POST /runs/{id}/resume` + interrupt/resume-through-checkpointer test. **P3 MCP loader done**
+  (hosted HTTP): `Connector.transport="http"` → `integrations/mcp.py` loads the system's MCP-server
+  tools via `langchain-mcp-adapters` (`mcp_tools_for(id)`); httpx kept as fallback. **Next:** P2
+  (give looping agents real tools so create_agent loops) + bind connector MCP tools into the live
+  agents + verify vs a real hosted server; P4 middleware activation; P5/P6. `deepagents` deferred.
+- Verified: ruff clean, **mypy --strict clean (65 files)**, **69 pytest tests green**. Live
   Postgres/LLM/Jira/Plane runs pending real `.env` credentials.
 - **Open follow-ups:** the create_agent/MCP/HITL phase above; Alembic migrations (tables are
   `create_all`); real Reviewer (maker/checker) + bounded Fixer; deepen code grounding.

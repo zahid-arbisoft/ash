@@ -36,8 +36,11 @@ async def _merge(state: WorkflowState) -> dict[str, Any]:
 
 
 def _route_after_intake(state: WorkflowState) -> str:
-    """raw_to_spec runs PM; spec_ready/raw_to_dev skip straight to the build team."""
-    return "pm" if state.intake_mode == "raw_to_spec" else "research"
+    """Fail fast if intake couldn't fetch the issue — no point running PM or the build team.
+    Otherwise: raw_to_dev skips PM; raw_to_spec and spec_ready both route through PM."""
+    if state.intake.error:
+        return "merge"
+    return "research" if state.intake_mode == "raw_to_dev" else "pm"
 
 
 def build_graph(agents: dict[str, Agent], *, checkpointer: Any) -> Any:
@@ -46,13 +49,19 @@ def build_graph(agents: dict[str, Agent], *, checkpointer: Any) -> Any:
 
     graph.add_node("intake", make_node(agents["intake"]))
     graph.add_node("pm", make_node(agents["pm"]))
+    graph.add_node("pm_publish", make_node(agents["pm_publish"]))
     for name in BUILD_ORDER:
         graph.add_node(name, make_node(agents[name]))
     graph.add_node("merge", _merge)
 
     graph.add_edge(START, "intake")
-    graph.add_conditional_edges("intake", _route_after_intake, {"pm": "pm", "research": "research"})
-    graph.add_edge("pm", "research")
+    graph.add_conditional_edges(
+        "intake",
+        _route_after_intake,
+        {"pm": "pm", "research": "research", "merge": "merge"},
+    )
+    graph.add_edge("pm", "pm_publish")
+    graph.add_edge("pm_publish", "research")
     graph.add_edge("research", "coding")
     graph.add_edge("coding", "reviewer")
     graph.add_edge("reviewer", "fixer")

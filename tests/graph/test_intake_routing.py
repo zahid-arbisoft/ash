@@ -47,10 +47,18 @@ class Noop:
         return {}
 
 
+class PMPublishNoop:
+    name = "pm"
+
+    async def run(self, state):
+        return {}
+
+
 def _build(body: str):
     agents = {
         "intake": IntakeAgent(Settings(), provider=FakeProvider(body)),
         "pm": PMStub(),
+        "pm_publish": PMPublishNoop(),
         "research": Noop("research"),
         "coding": Noop("coding"),
         "reviewer": Noop("reviewer"),
@@ -80,7 +88,51 @@ async def test_raw_to_dev_skips_pm():
     assert out["pm"]["spec"] is None
 
 
-async def test_spec_ready_parses_spec_and_skips_pm():
-    out = await _run(_build(_spec().model_dump_json()), "spec_ready", "", "t3")
-    assert out["pm"]["spec"] is not None  # parsed at intake
-    assert out["pm"]["note"] == "spec provided by source (spec_ready)"
+async def test_intake_error_skips_pm_and_fails_run():
+    """When intake errors the graph routes straight to merge without running PM."""
+
+    class BrokenProvider:
+        kind = "github"
+
+        async def fetch_issue(self, item_id: str) -> RawIssue:
+            raise ValueError("no issue source configured")
+
+        async def list_issues(self, *, filters=None, limit=20):
+            return []
+
+        async def post_comment(self, item_id, body):
+            return "url"
+
+    reached: list[str] = []
+
+    class SpyPM:
+        name = "pm"
+
+        async def run(self, state):
+            reached.append("pm")
+            return {"pm": {"note": "pm-ran"}}
+
+    agents = {
+        "intake": IntakeAgent(Settings(), provider=BrokenProvider()),
+        "pm": SpyPM(),
+        "pm_publish": PMPublishNoop(),
+        "research": Noop("research"),
+        "coding": Noop("coding"),
+        "reviewer": Noop("reviewer"),
+        "fixer": Noop("fixer"),
+    }
+    graph = build_graph(agents, checkpointer=MemorySaver())
+    initial = WorkflowState(run_id="t-err", project="plane", item_id="1")
+    result = await graph.ainvoke(initial, config={"configurable": {"thread_id": "t-err"}})
+    out = _as_dict(result)
+    assert out["status"] == "failed"
+    assert out["intake"]["error"] is not None
+    assert "pm" not in reached  # PM must not run when intake failed
+
+
+async def test_spec_ready_routes_through_pm():
+    """spec_ready now routes through PM (different prompt, same nodes as raw_to_spec)."""
+    out = await _run(_build("This is a pre-written spec document."), "spec_ready", "spec text", "t3")
+    # PMStub returns note="pm-ran" — confirms PM was reached
+    assert out["pm"]["note"] == "pm-ran"
+    assert out["status"] == "completed"

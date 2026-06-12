@@ -17,18 +17,28 @@ class Epic(BaseModel):
     )
     business_goal: str = Field(description="Why this matters to users/the product")
     acceptance_criteria: list[str] = Field(
-        description="Concrete, testable conditions that define 'done'"
+        description="Concrete, testable conditions that define 'done'. Must be an array of strings."
     )
-    edge_cases: list[str] = Field(default_factory=list)
+    edge_cases: list[str] = Field(
+        default_factory=list,
+        description="Edge cases or boundary conditions to watch for. Use an empty list if none.",
+    )
 
 
 class TechnicalSpec(BaseModel):
     approach: str = Field(description="High-level implementation approach")
     affected_areas: list[str] = Field(
-        default_factory=list, description="Modules/files/services likely to change"
+        default_factory=list,
+        description="Modules/files/services likely to change. Use an empty list if none.",
     )
-    data_model_changes: list[str] = Field(default_factory=list)
-    api_changes: list[str] = Field(default_factory=list)
+    data_model_changes: list[str] = Field(
+        default_factory=list,
+        description="Data model changes, each as a short string. Use an empty list if none.",
+    )
+    api_changes: list[str] = Field(
+        default_factory=list,
+        description="API or interface changes, each as a short string. Use an empty list if none.",
+    )
     testing_strategy: str = Field(description="How the change will be verified")
 
 
@@ -52,9 +62,13 @@ class Ticket(BaseModel):
         description="True if this ticket needs a research spike before it can be implemented; "
         "the Research agent picks these up. PM sets this for unclear/risky work.",
     )
-    acceptance_criteria: list[str] = Field(default_factory=list)
+    acceptance_criteria: list[str] = Field(
+        default_factory=list,
+        description="Testable done-conditions for this ticket. Use an empty list if none.",
+    )
     dependencies: list[str] = Field(
-        default_factory=list, description="ids of tickets that must land first"
+        default_factory=list,
+        description="IDs of tickets that must land first, e.g. ['T1']. Use an empty list if none.",
     )
     estimate: str = Field(default="", description="Rough size, e.g. S/M/L or hours")
 

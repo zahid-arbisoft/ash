@@ -46,6 +46,12 @@ class GitHubIssueProvider:
         return resp
 
     async def fetch_issue(self, item_id: str) -> RawIssue:
+        if not self._repo:
+            raise ValueError(
+                "GitHub repo is not configured. "
+                "Set 'repo' (e.g. 'owner/name') in the connector config at /admin, "
+                "or set issues.source_repo in your project YAML."
+            )
         resp = await self._request("GET", f"/repos/{self._repo}/issues/{item_id}")
         return self._to_issue(resp.json())
 

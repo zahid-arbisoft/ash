@@ -1,6 +1,8 @@
 # Plan — Agent runtime (create_agent + middleware) & MCP connectors
 
-> **Status:** PLAN ONLY (no code changes yet). Implement after sign-off.
+> **Status:** IN PROGRESS — **P0 + P1 done, P3 MCP loader done (hosted HTTP), P4 mechanism done**
+> (2026-06-12). Remaining: P2 (agent tools), binding MCP tools into the live agents + live
+> verification, P4 middleware activation, P5/P6. See §5 for per-phase status.
 > **Goal:** stop reinventing the wheel — adopt the latest LangChain/LangGraph ecosystem at the
 > agent layer, and replace bespoke issue integrations with **MCP connectors**.
 > **Scope of this doc:** the agent inner-loop runtime, human-in-the-loop, and the connector layer.
@@ -150,27 +152,33 @@ via `uvx plane-mcp-server`), which means adding `uv`/`node` to the Docker image 
 
 ---
 
-## 5. Migration phases (PR-sized; build after sign-off)
+## 5. Migration phases (PR-sized)
 
-- **P0 — Spike (½–1 day):** add `langchain>=1.1` + `langchain-mcp-adapters`; prove (a) a nested
-  `create_agent` runs inside a LangGraph node sharing the parent Postgres checkpointer, (b) a
-  `HumanInTheLoopMiddleware` interrupt bubbles up and resumes via `Command`, (c) `MultiServerMCPClient`
-  loads tools from one server (e.g. GitHub hosted). **Gate the rest on this.**
-- **P1 — Agent runtime seam:** `BaseAgent` builds a `create_agent` from declared
-  `tools/system_prompt/response_format/interrupt_tools`; node adapter maps state↔messages. Convert
-  **PM** first (minimal). Keep behavior/tests green.
-- **P2 — Convert looping agents:** Research, Coding, Reviewer, Fixer → `create_agent` with their
-  tools and bounds.
-- **P3 — MCP connector layer:** add `connectors/mcp.py` (build `MultiServerMCPClient` from a
-  `Connector` row); migrate intake to load tools + fetch via MCP; bind MCP tools into agents.
-  Migrate `Integration` model → `Connector` (data migration / rename) and update admin + UI labels.
-- **P4 — Real HITL:** `HumanInTheLoopMiddleware` on dangerous tools + `POST /runs/{id}/resume` +
-  UI approve/reject. Wire `Autonomy` → `interrupt_on`.
-- **P5 — Retire bespoke code:** delete `integrations/{github,jira,plane}.py` httpx providers and
-  the toolkits MCP now covers (`git`, `pr`, `codebase`, `shell` as applicable); keep `board` sink
-  and `code_intel` only if still used.
-- **P6 — Optional middleware:** `SummarizationMiddleware` (long code contexts),
-  `ModelFallbackMiddleware` (gateway resilience).
+- **P0 — Spike — ✅ DONE (2026-06-12).** Added `langchain` 1.3.8 + `langchain-mcp-adapters` 0.3.0;
+  empirically confirmed `create_agent(model, tools, system_prompt, response_format)` →
+  `ainvoke({"messages":[...]})` returns `structured_response`; confirmed `HumanInTheLoopMiddleware`
+  + `MultiServerMCPClient` import; confirmed interrupt→resume through the checkpointer (see P4).
+- **P1 — Agent runtime seam — ✅ DONE (2026-06-12).** `BaseAgent.build_agent()` constructs a
+  `create_agent` (model + `get_tools()` + `system_prompt` + `response_format`); `generate()` runs it
+  and returns the validated object. All structured agents (PM/Research/Coding) now use this one
+  runtime — the hand-rolled structured-output call is gone. Tests use a `create_agent`-compatible
+  fake model. Green.
+- **P2 — Convert looping agents — ⬜ TODO.** Give Research/Coding/Reviewer/Fixer real tools
+  (`get_tools()` → codebase/git/shell/PR) so `create_agent` actually loops. Behavioral change;
+  bounds via `max_iterations`. (Biggest remaining piece.)
+- **P3 — MCP connector layer — 🟡 LOADER DONE (2026-06-12; hosted HTTP).** `Connector.transport`
+  (`http` = hosted MCP, else built-in httpx); `integrations/mcp.py` builds a `MultiServerMCPClient`
+  StreamableHttp connection from the row and `load_mcp_tools()` / `mcp_tools_for(id)` return its
+  tools; admin + UI expose `transport`. Tested (config + mocked tool-load + an agent calling an MCP
+  tool through `create_agent`). httpx kept as fallback. **Remaining:** bind a run's connector MCP
+  tools into the live agents (pairs with P2) + verify against a real hosted server; local stdio
+  transport deferred.
+- **P4 — HITL — 🟡 MECHANISM DONE (2026-06-12).** `Runner.resume_run` + `POST /runs/{id}/resume`
+  land, and interrupt→resume-through-checkpointer is tested. **Remaining:** attach
+  `HumanInTheLoopMiddleware` to dangerous tools (depends on P2 tools existing) + wire `Autonomy` →
+  `interrupt_on` + a UI approve/reject control.
+- **P5 — Retire bespoke code — ⬜ TODO (after P3).** Remove httpx providers/toolkits MCP covers.
+- **P6 — Optional middleware — ⬜ TODO.** `SummarizationMiddleware`, `ModelFallbackMiddleware`.
 
 Each phase keeps **ruff + mypy --strict + pytest** green and updates the changelog.
 

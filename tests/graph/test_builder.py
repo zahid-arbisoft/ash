@@ -14,8 +14,17 @@ class StubAgent:
         return {self.name: {"note": f"{self.name} ran"}}
 
 
+class PMPublishStub:
+    name = "pm"
+
+    async def run(self, state):
+        return {}
+
+
 def _agents():
-    return {n: StubAgent(n) for n in ("intake", "pm", "research", "coding", "reviewer", "fixer")}
+    agents = {n: StubAgent(n) for n in ("intake", "pm", "research", "coding", "reviewer", "fixer")}
+    agents["pm_publish"] = PMPublishStub()
+    return agents
 
 
 def _as_dict(result):
@@ -29,6 +38,39 @@ async def test_graph_traverses_all_nodes_and_completes():
     assert result["issue_title"] == "pm ran"
     assert result["fixer"]["note"] == "fixer ran"
     assert result["status"] == "completed"
+
+
+async def test_graph_fails_fast_on_intake_error():
+    """When intake has an error the graph routes straight to merge without running PM or research."""
+    agents = _agents()
+    reached: list[str] = []
+
+    class FailingIntake:
+        name = "intake"
+
+        async def run(self, state):
+            reached.append("intake")
+            return {"intake": {"error": "no issue source configured"}}
+
+    class SpyPM:
+        name = "pm"
+
+        async def run(self, state):
+            reached.append("pm")
+            return {}
+
+    agents["intake"] = FailingIntake()
+    agents["pm"] = SpyPM()
+    graph = build_graph(agents, checkpointer=MemorySaver())
+    result = _as_dict(
+        await graph.ainvoke(
+            WorkflowState(run_id="r-fail-intake", project="plane", item_id="1"),
+            config={"configurable": {"thread_id": "r-fail-intake"}},
+        )
+    )
+    assert result["status"] == "failed"
+    assert "intake" in reached
+    assert "pm" not in reached  # PM must NOT run when intake errored
 
 
 async def test_graph_marks_failed_when_substate_has_error():

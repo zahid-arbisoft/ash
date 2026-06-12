@@ -7,7 +7,7 @@ from typing import Any
 
 from fastapi import APIRouter, File, HTTPException, Request, UploadFile, status
 
-from ash.api.schemas import RunAccepted, RunRequest, UploadResult
+from ash.api.schemas import ResumeRequest, RunAccepted, RunRequest, UploadResult
 from ash.config.settings import RUNTIME_DIR
 from ash.graph.runner import Runner
 
@@ -50,6 +50,15 @@ async def start_run(req: RunRequest, request: Request) -> RunAccepted:
 @router.get("/runs/{run_id}")
 async def get_run(run_id: str, request: Request) -> dict[str, Any]:
     state = await _runner(request).get_run(run_id)
+    if state is None:
+        raise HTTPException(status_code=404, detail=f"unknown run_id: {run_id}")
+    return state
+
+
+@router.post("/runs/{run_id}/resume")
+async def resume_run(run_id: str, req: ResumeRequest, request: Request) -> dict[str, Any]:
+    """Resume a run paused at a human-in-the-loop gate with the human's decision."""
+    state = await _runner(request).resume_run(run_id, req.decision)
     if state is None:
         raise HTTPException(status_code=404, detail=f"unknown run_id: {run_id}")
     return state

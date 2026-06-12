@@ -320,6 +320,7 @@ with it, so a teammate could point the loop at a new repo at any phase boundary.
 | 17 | **Layout = `src/` single package; config = hybrid** | Best-practice `src/ash/` single package (`api/`, `agents/`, `graph/`, `clients/`, `toolkits/`, `llm/`, `config/`). Tools are 3-layered: `clients/` → `toolkits/` (`BaseTool`) → agents. Config is **hybrid**: `pydantic-settings` `Settings` for engine secrets + per-agent model overrides, **plus** `projects/<name>.yaml` for the multi-tenant per-engagement layer (design rule #1 preserved). |
 | 18 | **Agent roster kept; Reviewer/Fixer stubbed; quality gates hardened** | We keep ASH's PM/Research/Coding (real) and add Reviewer/Fixer as `BaseAgent` stubs (Phases 2–3). With no local clone, Research/Coding skip gracefully so a PM-only run completes. **mypy --strict** is enforced in CI (ruff → mypy → pytest); Python ≥3.12. Posting the spec back as an issue comment is deferred (the `post_comment` seam exists). |
 | 19 | **Pluggable issue-source integrations + per-run intake routing + admin/UI** | Issue sources (GitHub / Jira / Plane) are DB-backed `Integration` rows behind one `IssueProvider` interface; secrets **encrypted at rest** (Fernet). A per-run **intake_mode** (`raw_to_spec` / `spec_ready` / `raw_to_dev`) drives a LangGraph **conditional edge** that uses or skips PM. App DB = **SQLAlchemy 2.0 async** (same Postgres); admin = **SQLAdmin** at `/admin` (env-credentialed); FE = **Jinja2** UI at `/`. New sources = new provider, no graph/agent changes. |
+| 20 | **Intake mode semantics: `raw_to_dev` is the only mode that skips PM** | `raw_to_spec` = PM generates full spec + tickets from raw requirements. `spec_ready` = PM extracts tickets (stories) from a pre-written spec using a distinct prompt — PM is NOT skipped, the JSON-parsing shortcut is removed. `raw_to_dev` = PM skipped entirely; raw issue goes straight to the build team. PM is two graph nodes: `pm` (generate + checkpoint) → `pm_publish` (HITL interrupt → approve/reject → push tickets). |
 
 ### 7a. Repo topology — configurable per project
 
@@ -511,6 +512,101 @@ Don't remove a gate until the thing under it has earned it.
 ## 11. Changelog
 
 Per the working agreement (top of doc), every decision/implementation change is logged here.
+
+- **2026-06-15 — Connector config hints in admin + interactive setup guide on connectors page.**
+  Added per-field help text (`column_descriptions`) to `ConnectorAdmin` in `admin/views.py` for the
+  `config`, `secret`, `base_url`, `transport`, `is_source`, `is_sink`, and `is_default_sink` fields —
+  each shows kind-specific examples (e.g. `github: {"repo": "owner/name"}`) and where to obtain the
+  API token. Added a full "Setup guide" card to `templates/connectors.html` — interactive kind-selector
+  tabs (GitHub / Jira / Plane) each showing a copyable JSON config template, field reference table
+  (required vs optional badges, descriptions), secret/base_url notes, and a GitHub-specific callout
+  explaining multiple-repo support (each connector row is independent; select per run). No code changes
+  required for multi-repo support — the architecture already supports N same-kind connectors.
+  Verified: ruff + mypy --strict clean, 71 tests green.
+
+- **2026-06-15 — Intake fail-fast + GitHub connector setup guide + cascade error fix.**
+  Diagnosed: selecting no connector + an item ID with a project YAML that has no `source_repo`
+  caused intake to build a `GitHubIssueProvider` with an empty `repo`, producing a cryptic
+  `404 GET /repos//issues/...` error that then cascaded through PM and pm_publish.
+  **Three root fixes:** (1) `GitHubIssueProvider.fetch_issue` validates `repo` before any network
+  call (raises `ValueError` with a clear "set repo in connector config" message). (2) `IntakeAgent._resolve`
+  validates `project.issues.source_repo` is non-empty and `GITHUB_TOKEN` is set before using the
+  legacy project-YAML path; raises an actionable error listing all three fix options. (3) Graph
+  routing after intake: if `state.intake.error` is set, route directly to `merge` (fail fast) —
+  PM and research no longer run when intake couldn't fetch the issue. **pm_publish** also updated:
+  if `state.pm.spec is None`, return `{}` (no-op, preserve PM's error) instead of emitting a
+  second misleading error. **Run form** updated with a "No connectors yet" setup guide, an
+  inline JS warning when an item ID is entered with no connector selected, and clearer help text.
+  Two new tests: `test_graph_fails_fast_on_intake_error`, `test_intake_error_skips_pm_and_fails_run`.
+  Verified: ruff + mypy --strict clean (65 files), 71 tests green.
+
+- **2026-06-15 — Intake mode semantics corrected + UI review gate + runs list page.**
+  Three changes shipped together:
+
+  1. **Intake mode semantics (decision #20):** Clarified and implemented the intended behaviour
+     for all three modes:
+     - `raw_to_spec` — PM receives raw requirements (issue text / uploaded docs) and generates a
+       full spec **and** implementation tickets (stories). Human review gate before push.
+     - `spec_ready` — PM receives a pre-written specification and extracts implementation tickets
+       from it without re-writing the spec from scratch. Uses a distinct `_SYSTEM_SPEC_READY` prompt
+       ("stay faithful to the spec, break into stories"). Human review gate before push.
+     - `raw_to_dev` — PM is skipped entirely; the build team works directly from the raw issue.
+     **Breaking change from old behaviour:** `spec_ready` previously tried to parse the issue body
+     as a raw JSON `Spec` object (brittle; failed for real natural-language specs) and skipped PM
+     entirely. Now `spec_ready` routes **through PM** — the conditional edge in `builder.py` skips
+     PM only for `raw_to_dev`. The JSON-parsing shortcut in `intake.py` is removed.
+
+  2. **PM two-phase design + HITL review gate (from 2026-06-15 session):** PM is split into two
+     graph nodes: `pm` (spec/ticket generation → board write → checkpoint) and `pm_publish` (calls
+     `langgraph.types.interrupt("spec_review")` → pauses → user reviews spec in the UI → Approve
+     or Reject → tickets pushed to connector on approval). `graph/nodes.py` updated to re-raise
+     `GraphInterrupt` instead of catching it. `runner.get_run()` overlays `status="awaiting_review"`
+     and `pending_review=True` when `snapshot.interrupts` is non-empty.
+
+  3. **Pretty spec view (`run_status.html`):** Replaced raw JSON dump with a tabbed card layout —
+     Overview (epic + acceptance criteria), Technical (approach, affected areas, data/API changes),
+     Tickets (card grid with type badge, SPIKE flag, estimate, deps), Risks (severity-coloured rows).
+     Auto-refresh only while `status == "running"`; stops during review gate so the user can interact.
+
+  4. **Paginated runs list (`/ui/runs`):** New route + `runs_list.html` template — table of all
+     runs with project/mode filters and pagination (20 per page). "Runs" added to the nav.
+     Run-new form descriptions updated to match the corrected mode semantics.
+
+  Verified: ruff + mypy --strict clean (65 files), 69 tests green.
+
+- **2026-06-12 — MCP connector layer (P3, hosted HTTP) — access GitHub/Jira/Plane via their MCP
+  servers.** Added `Connector.transport` (`http` = a hosted MCP server; blank = the built-in httpx
+  client, kept as fallback per decision). `integrations/mcp.py` builds a `MultiServerMCPClient`
+  StreamableHttp connection from the connector (`base_url` + `Authorization: Bearer <secret>` /
+  `config.headers`) and `load_mcp_tools()` / `service.mcp_tools_for(id)` return the server's tools as
+  LangChain `BaseTool`s; admin + UI expose `transport`. Tested: config building, mocked tool-load,
+  and an agent calling an MCP tool through `create_agent`. **Remaining:** bind a run's connector MCP
+  tools into the live agents (pairs with P2) + verify against a real hosted server (can't run MCP
+  servers in CI). Verified: ruff + mypy --strict clean (66 files), 67 tests green.
+
+- **2026-06-12 — Adopted `create_agent` runtime (P0+P1) + HITL resume mechanism (P4) from the
+  agent-runtime plan.** Added `langchain` 1.3.8 + `langchain-mcp-adapters` 0.3.0. **P1:**
+  `BaseAgent.build_agent()` constructs a LangChain `create_agent` (model + tools + `system_prompt`
+  + `response_format`); `generate()` runs it and returns the validated object — every structured
+  agent (PM/Research/Coding) now shares one maintained agent runtime instead of a hand-rolled
+  structured-output call. **P4 mechanism:** `Runner.resume_run` + `POST /runs/{id}/resume`, with a
+  test proving interrupt→resume through the checkpointer (the P0 risk-#1 item). **Still TODO:** P2
+  (give the looping agents real tools so `create_agent` loops), P3 (MCP connector layer — needs live
+  `uvx`/hosted servers to verify), P4 middleware activation (`HumanInTheLoopMiddleware` on dangerous
+  tools + `Autonomy`→`interrupt_on` + UI approve/reject), P5/P6. Verified: ruff + mypy --strict clean
+  (66 files), 61 tests green.
+
+- **2026-06-12 — Unified `Integration` + `TaskSink` → one `Connector` model.** Collapsed the two
+  overlapping tables into a single `connectors` table: a connector has `is_source` / `is_sink`
+  (a system like Jira is configured **once** for both directions) + `is_default_sink`, replacing
+  separate `ProviderKind`/`SinkKind` with one `ConnectorKind` (github/jira/plane/file/sheets). Updated
+  the source registry/service (`build_provider`, `provider_for` checks `is_source`, `create_connector`/
+  `list_connectors`/`get_connector`), the sink service (`resolve_task_sink`/`get_default_sink`/
+  `build_sink`), a single `ConnectorAdmin` at `/admin`, and the UI (`/ui/connectors`; run form lists
+  sources vs sinks by role). Run/state fields keep the names `integration_id` (source) /
+  `task_sink_id` (sink) but now reference connector ids. **No Alembic** → existing `integrations`/
+  `task_sinks` rows are re-entered as connectors. Verified: ruff + mypy --strict clean (65 files),
+  60 tests green.
 
 - **2026-06-12 — Dockerfile dep-layer caching + PM-only config robustness.** (1) Dockerfile split so
   third-party deps install from a stub package keyed only on `pyproject.toml`; the real package is an

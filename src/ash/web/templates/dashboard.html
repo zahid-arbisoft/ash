@@ -4,16 +4,21 @@
 <h1>Dashboard</h1>
 
 <div class="card">
-  <h2>Integrations ({{ integrations|length }})</h2>
-  {% if integrations %}
+  <h2>Connectors ({{ connectors|length }})</h2>
+  {% if connectors %}
     <table>
-      <tr><th>Name</th><th>Kind</th><th>Enabled</th></tr>
-      {% for i in integrations %}
-        <tr><td>{{ i.name }}</td><td><span class="pill">{{ i.kind.value }}</span></td><td>{{ "✓" if i.enabled else "—" }}</td></tr>
+      <tr><th>Name</th><th>Kind</th><th>Source</th><th>Sink</th><th>Enabled</th></tr>
+      {% for c in connectors %}
+        <tr>
+          <td>{{ c.name }}</td><td><span class="pill">{{ c.kind.value }}</span></td>
+          <td>{{ "✓" if c.is_source else "—" }}</td>
+          <td>{{ "✓ (default)" if c.is_default_sink else ("✓" if c.is_sink else "—") }}</td>
+          <td>{{ "✓" if c.enabled else "—" }}</td>
+        </tr>
       {% endfor %}
     </table>
   {% else %}
-    <p class="muted">No integrations yet. Add one in the <a href="/admin" target="_blank">Admin portal</a>.</p>
+    <p class="muted">No connectors yet. Add one in the <a href="/admin" target="_blank">Admin portal</a>.</p>
   {% endif %}
 </div>
 

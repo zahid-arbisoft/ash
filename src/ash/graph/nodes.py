@@ -9,6 +9,8 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from typing import Any, Protocol
 
+from langgraph.errors import GraphInterrupt
+
 from ash.graph.state import WorkflowState
 
 
@@ -22,6 +24,8 @@ def make_node(agent: Agent) -> Callable[[WorkflowState], Awaitable[dict[str, Any
     async def node(state: WorkflowState) -> dict[str, Any]:
         try:
             return await agent.run(state)
+        except GraphInterrupt:
+            raise  # let LangGraph handle human-in-the-loop interrupts
         except Exception as exc:  # noqa: BLE001 — record, never crash the run
             return {agent.name: {"error": f"{type(exc).__name__}: {exc}"}}
 

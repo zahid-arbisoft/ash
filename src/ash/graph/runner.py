@@ -10,6 +10,7 @@ import asyncio
 import uuid
 from typing import Any, cast
 
+from langgraph.types import Command
 from pydantic_core import to_jsonable_python
 
 from ash.graph.state import WorkflowState
@@ -59,6 +60,11 @@ class Runner:
             task.add_done_callback(self._tasks.discard)
         return run_id
 
+    async def resume_run(self, run_id: str, decision: Any) -> dict[str, Any] | None:
+        """Resume a run paused at a human-in-the-loop interrupt with the human's decision."""
+        await self._graph.ainvoke(Command(resume=decision), config=self._config(run_id))
+        return await self.get_run(run_id)
+
     async def get_run(self, run_id: str) -> dict[str, Any] | None:
         snapshot = await self._graph.aget_state(self._config(run_id))
         if not snapshot or not snapshot.values:
@@ -66,4 +72,9 @@ class Runner:
         # LangGraph may hand back namespaces as pydantic instances, as dicts, or as dicts that still
         # wrap pydantic objects (e.g. a Spec inside `pm`). Deep-convert to JSON-safe primitives
         # (enums -> values, datetimes -> iso, models -> dicts) so the API and the UI's tojson work.
-        return cast(dict[str, Any], to_jsonable_python(snapshot.values))
+        state = cast(dict[str, Any], to_jsonable_python(snapshot.values))
+        # Overlay UI-facing fields for HITL interrupt (not stored in graph state itself).
+        if snapshot.interrupts:
+            state["status"] = "awaiting_review"
+            state["pending_review"] = True
+        return state

@@ -6,15 +6,15 @@ import uuid
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ash.config.settings import PROJECTS_DIR, RUNTIME_DIR
 from ash.db.base import get_session
-from ash.db.models import Integration, RunRecord, TaskSink
+from ash.db.models import Connector, RunRecord
 from ash.graph.runner import Runner
 
 router = APIRouter()
@@ -36,7 +36,7 @@ def _runner(request: Request) -> Runner:
 async def dashboard(
     request: Request, session: Annotated[AsyncSession, Depends(get_session)]
 ) -> HTMLResponse:
-    integrations = list((await session.execute(select(Integration))).scalars().all())
+    connectors = list((await session.execute(select(Connector))).scalars().all())
     runs = list(
         (await session.execute(select(RunRecord).order_by(RunRecord.created_at.desc()).limit(10)))
         .scalars()
@@ -45,33 +45,77 @@ async def dashboard(
     return templates.TemplateResponse(
         request,
         "dashboard.html",
-        {"integrations": integrations, "runs": runs},
+        {"connectors": connectors, "runs": runs},
     )
 
 
-@router.get("/ui/integrations", response_class=HTMLResponse)
-async def integrations_list(
+_PER_PAGE = 20
+
+
+@router.get("/ui/runs", response_class=HTMLResponse)
+async def runs_list(
+    request: Request,
+    session: Annotated[AsyncSession, Depends(get_session)],
+    page: int = Query(default=1, ge=1),
+    project: str = Query(default=""),
+    mode: str = Query(default=""),
+) -> HTMLResponse:
+    offset = (page - 1) * _PER_PAGE
+    q = select(RunRecord).order_by(RunRecord.created_at.desc())
+    if project:
+        q = q.where(RunRecord.project == project)
+    if mode:
+        q = q.where(RunRecord.intake_mode == mode)
+    total: int = (
+        await session.execute(select(func.count()).select_from(q.subquery()))
+    ).scalar_one()
+    runs = list((await session.execute(q.limit(_PER_PAGE).offset(offset))).scalars().all())
+    pages = max(1, (total + _PER_PAGE - 1) // _PER_PAGE)
+    return templates.TemplateResponse(
+        request,
+        "runs_list.html",
+        {
+            "runs": runs,
+            "page": page,
+            "pages": pages,
+            "total": total,
+            "projects": _projects(),
+            "modes": INTAKE_MODES,
+            "filter_project": project,
+            "filter_mode": mode,
+        },
+    )
+
+
+@router.get("/ui/connectors", response_class=HTMLResponse)
+async def connectors_list(
     request: Request, session: Annotated[AsyncSession, Depends(get_session)]
 ) -> HTMLResponse:
-    integrations = list(
-        (await session.execute(select(Integration).order_by(Integration.name))).scalars().all()
+    connectors = list(
+        (await session.execute(select(Connector).order_by(Connector.name))).scalars().all()
     )
-    return templates.TemplateResponse(request, "integrations.html", {"integrations": integrations})
+    return templates.TemplateResponse(request, "connectors.html", {"connectors": connectors})
 
 
 @router.get("/ui/runs/new", response_class=HTMLResponse)
 async def run_new(
     request: Request, session: Annotated[AsyncSession, Depends(get_session)]
 ) -> HTMLResponse:
-    integrations = list(
-        (await session.execute(select(Integration).where(Integration.enabled))).scalars().all()
+    sources = list(
+        (await session.execute(select(Connector).where(Connector.is_source, Connector.enabled)))
+        .scalars()
+        .all()
     )
-    sinks = list((await session.execute(select(TaskSink).where(TaskSink.enabled))).scalars().all())
+    sinks = list(
+        (await session.execute(select(Connector).where(Connector.is_sink, Connector.enabled)))
+        .scalars()
+        .all()
+    )
     return templates.TemplateResponse(
         request,
         "run_new.html",
         {
-            "integrations": integrations,
+            "sources": sources,
             "sinks": sinks,
             "projects": _projects(),
             "modes": INTAKE_MODES,

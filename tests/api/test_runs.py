@@ -14,13 +14,18 @@ class StubAgent:
         self.name = name
 
     async def run(self, state):
-        return {self.name: {"note": "ok"}} if self.name != "pm" else {"issue_title": "ok"}
+        if self.name == "pm":
+            return {"issue_title": "ok"}
+        if self.name == "pm_publish":
+            # skip the HITL interrupt in tests — just return immediately
+            return {"pm": {"note": "published (stub)"}}
+        return {self.name: {"note": "ok"}}
 
 
 def _app():
     app = FastAPI()
     app.include_router(router)
-    agents = {n: StubAgent(n) for n in ("intake", "pm", "research", "coding", "reviewer", "fixer")}
+    agents = {n: StubAgent(n) for n in ("intake", "pm", "pm_publish", "research", "coding", "reviewer", "fixer")}
     app.state.runner = Runner(graph=build_graph(agents, checkpointer=MemorySaver()))
     return app
 
