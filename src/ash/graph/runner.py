@@ -7,6 +7,7 @@ replace `asyncio.create_task` with an enqueue call without touching the API or g
 from __future__ import annotations
 
 import asyncio
+import logging
 import uuid
 from typing import Any, cast
 
@@ -14,6 +15,8 @@ from langgraph.types import Command
 from pydantic_core import to_jsonable_python
 
 from ash.graph.state import WorkflowState
+
+logger = logging.getLogger(__name__)
 
 
 class Runner:
@@ -38,6 +41,10 @@ class Runner:
         wait: bool = False,
     ) -> str:
         run_id = uuid.uuid4().hex
+        logger.info(
+            "run_start run_id=%s intake_mode=%s project=%s item_id=%s integration_id=%s",
+            run_id, intake_mode, project or "(none)", item_id or "(none)", integration_id,
+        )
         initial = WorkflowState(
             run_id=run_id,
             project=project,
@@ -50,7 +57,11 @@ class Runner:
         )
 
         async def _invoke() -> None:
-            await self._graph.ainvoke(initial, config=self._config(run_id))
+            try:
+                await self._graph.ainvoke(initial, config=self._config(run_id))
+                logger.info("run_end run_id=%s status=completed", run_id)
+            except Exception:
+                logger.exception("run_end run_id=%s status=crashed", run_id)
 
         if wait:
             await _invoke()

@@ -17,6 +17,7 @@ docs/plan/agent_runtime_and_connectors_plan.md).
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import Any
 
 from ash.agents.base import BaseAgent
@@ -27,6 +28,8 @@ from ash.documents import read_documents
 from ash.graph.state import WorkflowState
 from ash.schemas import Spec
 from ash.sinks.service import resolve_task_sink
+
+logger = logging.getLogger(__name__)
 
 _SYSTEM = """You are a senior product/technical lead acting as a Spec Builder. You receive raw \
 requirements (issue text and/or uploaded documents) and produce a rigorous, implementable \
@@ -74,9 +77,11 @@ class PMAgent(BaseAgent):
             refs = await self._publish_tickets(spec, state, project.runtime_dir / "board")
             note = f"{len(refs)} ticket(s) pushed"
             ticket_refs = [r.url or r.id for r in refs]
+            logger.info("run_id=%s tickets_pushed=%d", state.run_id, len(refs))
         except Exception as exc:  # noqa: BLE001 — keep the spec; report the push failure
             note = f"spec ready, but ticket push failed: {type(exc).__name__}: {exc}"
             ticket_refs = []
+            logger.warning("run_id=%s ticket_push_failed: %s", state.run_id, exc)
         if spikes:
             note += f"; spikes for research: {', '.join(spikes)}"
 
