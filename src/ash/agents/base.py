@@ -9,10 +9,10 @@ deterministic, offline tests.
 
 from __future__ import annotations
 
-import logging
 from abc import ABC, abstractmethod
 from typing import Any, TypeVar, cast
 
+import structlog
 from langchain.agents import create_agent
 from langchain_core.language_models import BaseChatModel
 from langchain_core.tools import BaseTool
@@ -59,7 +59,7 @@ class BaseAgent(ABC):
 
     async def generate(self, schema: type[T], *, system: str, user: str) -> T:
         """Run a `create_agent` with `response_format=schema` and return the validated object."""
-        logging.getLogger(__name__).debug("llm_call agent=%s schema=%s", self.name, schema.__name__)
+        structlog.get_logger(__name__).debug("llm_call", schema=schema.__name__)
         agent = self.build_agent(system_prompt=system, response_format=schema)
         result = await agent.ainvoke({"messages": [("user", user)]})
         return cast(T, result["structured_response"])

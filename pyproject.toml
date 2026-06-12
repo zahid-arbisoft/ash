@@ -31,6 +31,8 @@ dependencies = [
     "langchain-community>=0.3",
     "pypdf>=5.0",
     "docx2txt>=0.8",
+    # observability
+    "structlog>=24.0",
 ]
 
 [project.optional-dependencies]
