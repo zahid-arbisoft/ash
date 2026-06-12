@@ -1,3 +1,7 @@
+from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
+from langchain_core.messages import AIMessage
+from pydantic import BaseModel
+
 from ash.agents.pm import PMAgent
 from ash.config.settings import Settings
 from ash.graph.state import WorkflowState
@@ -19,20 +23,25 @@ def _spec(tickets=None) -> Spec:
     )
 
 
-class _Structured:
-    def __init__(self, result):
-        self._result = result
+class FakeModel(GenericFakeChatModel):
+    """create_agent-compatible fake: emits the structured-output tool call for `result`."""
 
-    async def ainvoke(self, messages):
-        return self._result
+    def __init__(self, result: BaseModel) -> None:
+        msg = AIMessage(
+            content="",
+            tool_calls=[
+                {
+                    "name": type(result).__name__,
+                    "args": result.model_dump(),
+                    "id": "call_1",
+                    "type": "tool_call",
+                }
+            ],
+        )
+        super().__init__(messages=iter([msg]))
 
-
-class FakeModel:
-    def __init__(self, result):
-        self._result = result
-
-    def with_structured_output(self, schema):
-        return _Structured(self._result)
+    def bind_tools(self, tools, **kwargs):  # create_agent binds the structured-output tool
+        return self
 
 
 class _FakeSession:
@@ -89,7 +98,7 @@ async def test_pm_generates_spec_publishes_board_and_pushes_tickets(monkeypatch)
 
     update = await agent.run(state)
 
-    assert update["pm"]["spec"] is spec
+    assert update["pm"]["spec"] == spec
     assert update["pm"]["board_ref"] == "board-ref-1"
     assert update["pm"]["ticket_refs"] == ["fake://T1", "fake://T2"]
     assert "spikes for research: T2" in update["pm"]["note"]
@@ -118,7 +127,7 @@ async def test_pm_keeps_spec_when_ticket_push_fails(monkeypatch):
 
     update = await agent.run(state)
     # spec is preserved; the push failure is reported, not fatal
-    assert update["pm"]["spec"] is spec
+    assert update["pm"]["spec"] == spec
     assert "error" not in update["pm"]
     assert "ticket push failed" in update["pm"]["note"]
 
@@ -134,7 +143,7 @@ async def test_pm_uses_provided_spec_for_spec_ready(monkeypatch):
     state.pm.spec = spec
 
     update = await agent.run(state)
-    assert update["pm"]["spec"] is spec
+    assert update["pm"]["spec"] == spec
 
 
 class _Board:

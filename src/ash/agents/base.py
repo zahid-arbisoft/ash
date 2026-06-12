@@ -1,8 +1,10 @@
-"""BaseAgent — the agent contract (boilerplate spec §4).
+"""BaseAgent — the agent contract (boilerplate spec §4), running on LangChain `create_agent`.
 
 An agent reads the root `WorkflowState`, does its work, and returns a partial update scoped to its
-own namespace. The LLM is provided by the provider-agnostic factory (per-agent model + global
-fallback) and can be injected for deterministic, offline tests.
+own namespace. Structured generation goes through `create_agent` (LangChain's maintained agent
+runtime: the ReAct tool loop + `response_format` structured output + the middleware hook), so all
+agents share one runtime instead of hand-rolled tool loops. The model and tools are injectable for
+deterministic, offline tests.
 """
 
 from __future__ import annotations
@@ -10,8 +12,9 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Any, TypeVar, cast
 
+from langchain.agents import create_agent
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.tools import BaseTool
 from pydantic import BaseModel
 
 from ash.config.settings import Settings
@@ -38,10 +41,23 @@ class BaseAgent(ABC):
         llm = self.settings.model_for(self.name)
         return get_chat_model(llm, api_key=self.settings.api_key_for(llm.provider))
 
-    async def generate(self, schema: type[T], *, system: str, user: str) -> T:
-        """One-shot structured generation: force the model to return `schema`."""
-        structured = self.get_model().with_structured_output(schema)
-        result = await structured.ainvoke(
-            [SystemMessage(content=system), HumanMessage(content=user)]
+    def get_tools(self) -> list[BaseTool]:
+        """Tools this agent may call inside its `create_agent` loop (default: none)."""
+        return []
+
+    def build_agent(
+        self, *, system_prompt: str, response_format: type[BaseModel] | None = None
+    ) -> Any:
+        """Construct this agent's `create_agent` runtime (its own compiled LangGraph)."""
+        return create_agent(
+            model=self.get_model(),
+            tools=self.get_tools(),
+            system_prompt=system_prompt,
+            response_format=response_format,
         )
-        return cast(T, result)
+
+    async def generate(self, schema: type[T], *, system: str, user: str) -> T:
+        """Run a `create_agent` with `response_format=schema` and return the validated object."""
+        agent = self.build_agent(system_prompt=system, response_format=schema)
+        result = await agent.ainvoke({"messages": [("user", user)]})
+        return cast(T, result["structured_response"])

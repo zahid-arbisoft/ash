@@ -1,4 +1,4 @@
-"""App tables: registered issue-source integrations + a lightweight run registry."""
+"""App tables: a unified connector registry + a lightweight run registry."""
 
 from __future__ import annotations
 
@@ -13,39 +13,41 @@ from ash.db.base import Base
 from ash.db.crypto import EncryptedString
 
 
-class ProviderKind(str, enum.Enum):
+class ConnectorKind(str, enum.Enum):
+    """The system a connector talks to. The same system can be a source and/or a sink."""
+
     github = "github"
     jira = "jira"
     plane = "plane"
+    file = "file"  # local board (Markdown/JSON) — sink only; the default fallback
+    sheets = "sheets"  # Google Sheets (sink, later)
 
 
-class SinkKind(str, enum.Enum):
-    """Where the PM agent pushes generated tickets/tasks."""
+class Connector(Base):
+    """A single configured connection to an external system. Secret is encrypted at rest.
 
-    file = "file"  # local board (Markdown/JSON) — the default fallback
-    jira = "jira"
-    plane = "plane"
-    sheets = "sheets"  # Google Sheets (later)
-
-
-class TaskSink(Base):
-    """A configured destination for PM-generated tickets. Secret is encrypted at rest.
-
-    Selection at run time: explicit `task_sink_id` on the run → else the row with `is_default` →
-    else the local file board. The default is managed in the admin portal.
+    One connector can be used as an issue **source** (PM reads issues from it), a ticket **sink**
+    (PM creates tickets in it), or both — toggled via `is_source` / `is_sink`. This replaces the
+    former separate `Integration` (source) and `TaskSink` (sink) tables, so a system like Jira is
+    configured once. The default sink (used when a run doesn't pick one) is `is_default_sink`.
     """
 
-    __tablename__ = "task_sinks"
+    __tablename__ = "connectors"
 
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(200), unique=True)
-    kind: Mapped[SinkKind] = mapped_column(Enum(SinkKind, name="sink_kind"))
+    kind: Mapped[ConnectorKind] = mapped_column(Enum(ConnectorKind, name="connector_kind"))
+    # how we reach the system: None/"" = our built-in httpx client; "http" = a hosted MCP server
+    # (tools loaded via langchain-mcp-adapters from `base_url`, auth from `secret`/config headers)
+    transport: Mapped[str | None] = mapped_column(String(20), default=None)
     base_url: Mapped[str | None] = mapped_column(String(500), default=None)
-    # provider-specific config, e.g. {"project_key": "ENG", "email": "..."} /
+    # system-specific config, e.g. {"repo": "owner/name"} / {"project_key": "ENG", "email": "..."} /
     # {"workspace_slug": "acme", "project_id": "..."}
     config: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     secret: Mapped[str] = mapped_column(EncryptedString(2000), default="")
-    is_default: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_source: Mapped[bool] = mapped_column(Boolean, default=False)  # read issues from it
+    is_sink: Mapped[bool] = mapped_column(Boolean, default=False)  # create tickets in it
+    is_default_sink: Mapped[bool] = mapped_column(Boolean, default=False)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
@@ -53,30 +55,8 @@ class TaskSink(Base):
     )
 
     def __str__(self) -> str:
-        return f"{self.name} ({self.kind.value}{', default' if self.is_default else ''})"
-
-
-class Integration(Base):
-    """A configured issue source (GitHub / Jira / Plane). Secret is encrypted at rest."""
-
-    __tablename__ = "integrations"
-
-    id: Mapped[int] = mapped_column(primary_key=True)
-    name: Mapped[str] = mapped_column(String(200), unique=True)
-    kind: Mapped[ProviderKind] = mapped_column(Enum(ProviderKind, name="provider_kind"))
-    base_url: Mapped[str | None] = mapped_column(String(500), default=None)
-    # provider-specific config, e.g. {"repo": "owner/name"} / {"project_key": "ENG"} /
-    # {"workspace_slug": "acme", "project_id": "..."}
-    config: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
-    secret: Mapped[str] = mapped_column(EncryptedString(2000), default="")
-    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
-    )
-
-    def __str__(self) -> str:
-        return f"{self.name} ({self.kind.value})"
+        roles = "/".join(r for r, on in (("source", self.is_source), ("sink", self.is_sink)) if on)
+        return f"{self.name} ({self.kind.value}: {roles or 'unused'})"
 
 
 class AdminUser(Base):

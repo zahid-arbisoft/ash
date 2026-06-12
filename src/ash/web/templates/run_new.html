@@ -9,11 +9,11 @@
       {% for p in projects %}<option value="{{ p }}">{{ p }}</option>{% endfor %}
     </select>
 
-    <label for="integration_id">Issue source (integration)</label>
+    <label for="integration_id">Issue source (connector)</label>
     <select id="integration_id" name="integration_id">
       <option value="">— none / attachments only —</option>
-      {% for i in integrations %}
-        <option value="{{ i.id }}">{{ i.name }} ({{ i.kind.value }})</option>
+      {% for c in sources %}
+        <option value="{{ c.id }}">{{ c.name }} ({{ c.kind.value }})</option>
       {% endfor %}
     </select>
 
@@ -27,7 +27,7 @@
     <select id="task_sink_id" name="task_sink_id">
       <option value="">— admin default (or local board) —</option>
       {% for s in sinks %}
-        <option value="{{ s.id }}">{{ s.name }} ({{ s.kind.value }}){{ ' · default' if s.is_default else '' }}</option>
+        <option value="{{ s.id }}">{{ s.name }} ({{ s.kind.value }}){{ ' · default' if s.is_default_sink else '' }}</option>
       {% endfor %}
     </select>
 

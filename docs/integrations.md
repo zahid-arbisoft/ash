@@ -1,11 +1,13 @@
-# How to add an integration (GitHub / Jira / Plane)
+# How to add a connector (GitHub / Jira / Plane)
 
-An **integration** is a saved, credentialed connection to an *issue source*. ASH pulls a ticket
-from it (the intake step), then the agent graph turns that ticket into a spec and/or code. Each
-integration is a row in the `integrations` table; its secret (API token) is **encrypted at rest**.
+A **connector** is a saved, credentialed connection to an external system, stored once in the
+`connectors` table (secret **encrypted at rest**). A connector can be used as an issue **source**
+(`is_source` — PM reads issues from it), a ticket **sink** (`is_sink` — PM creates tickets in it),
+or **both** — so e.g. Jira is configured a single time instead of twice. The default sink (used when
+a run doesn't pick one) is the connector flagged `is_default_sink`.
 
-Adding an integration = creating that row (via the admin portal, the API/UI run picker, or code) so
-runs can reference it by `integration_id`.
+Add/edit connectors in the admin portal (`/admin` → **Connectors**); a run then references one as
+its source (`integration_id`) and/or sink (`task_sink_id`).
 
 ---
 
@@ -39,17 +41,18 @@ runs can reference it by `integration_id`.
      *Issues: Read* on the repo).
    - **Posting comments back** (deferred feature, but scope it now if you want it later): *Issues:
      Read and write* / classic `repo`.
-2. Open the **admin portal** → <http://127.0.0.1:8000/admin> → **Integrations** → **New**.
+2. Open the **admin portal** → <http://127.0.0.1:8000/admin> → **Connectors** → **New**.
 3. Fill in the fields:
 
-   | Field      | Value                                              | Notes |
-   |------------|----------------------------------------------------|-------|
-   | `name`     | `plane-github` (any label)                         | unique, your choice |
-   | `kind`     | `github`                                           | |
-   | `base_url` | *(blank)*                                          | only set for **GitHub Enterprise**, e.g. `https://github.mycorp.com/api/v3` |
-   | `config`   | `{"repo": "makeplane/plane"}`                      | the `owner/name` repo to read issues from |
-   | `secret`   | your PAT (e.g. `ghp_…`)                            | stored encrypted; never shown in lists |
-   | `enabled`  | ✓                                                  | |
+   | Field       | Value                                              | Notes |
+   |-------------|----------------------------------------------------|-------|
+   | `name`      | `plane-github` (any label)                         | unique, your choice |
+   | `kind`      | `github`                                           | |
+   | `is_source` | ✓                                                  | use it to read issues |
+   | `base_url`  | *(blank)*                                          | only set for **GitHub Enterprise**, e.g. `https://github.mycorp.com/api/v3` |
+   | `config`    | `{"repo": "makeplane/plane"}`                      | the `owner/name` repo to read issues from |
+   | `secret`    | your PAT (e.g. `ghp_…`)                            | stored encrypted; never shown in lists |
+   | `enabled`   | ✓                                                  | |
 
 4. **Save.** That's it — the integration is live.
 
@@ -120,17 +123,19 @@ Chosen per run (UI dropdown or `intake_mode` in the API):
 
 ## Task sinks — where PM pushes the generated tickets
 
-After PM produces a spec, it breaks it into tickets and **pushes them to a task sink**. Sinks are
-DB rows managed in the admin portal (`/admin` → **Task sinks**), with secrets encrypted at rest:
+After PM produces a spec, it breaks it into tickets and **pushes them to a task sink**. A sink is
+just a **connector with `is_sink` ticked** (same `/admin` → **Connectors** list — a Jira connector
+can be both a source and a sink). Sink-relevant fields:
 
 | Field | Value | Notes |
 |---|---|---|
 | `name` | any label | |
 | `kind` | `file` / `jira` / `plane` / `sheets` | `file` = local board (default); `sheets` later |
+| `is_sink` | ✓ | marks the connector usable as a ticket destination |
+| `is_default_sink` | ✓ on one | used when a run doesn't pick a sink (or runs autonomously) |
 | `base_url` | site URL | required for Jira; Plane defaults to cloud |
-| `config` | `{"project_key": "ENG", "email": "..."}` (Jira) / `{"workspace_slug": "...", "project_id": "..."}` (Plane) | |
+| `config` | `{"project_key": "ENG", "email": "...", "issue_type": "Task"}` (Jira) / `{"workspace_slug": "...", "project_id": "..."}` (Plane) | `issue_type` defaults to `Task` |
 | `secret` | API token | encrypted |
-| `is_default` | ✓ on one row | used when a run doesn't pick a sink (or runs autonomously) |
 
 **Selection per run:** explicit choice (UI dropdown / `task_sink_id` in the API) → else the
 **admin default** → else the **local file board** (`runtime/<project>/board/`).
@@ -156,21 +161,26 @@ issue text:
 
 ## Programmatic / seeding alternative
 
-To script integration creation (e.g. a seed task) instead of the portal:
+To script connector creation (e.g. a seed task) instead of the portal:
 
 ```python
 from ash.db.base import get_sessionmaker
-from ash.db.models import ProviderKind
-from ash.integrations.service import create_integration
+from ash.db.models import ConnectorKind
+from ash.integrations.service import create_connector
 
 async def seed():
     async with get_sessionmaker()() as session:
-        await create_integration(
+        # one Jira connector used as BOTH a source and the default sink
+        await create_connector(
             session,
-            name="plane-github",
-            kind=ProviderKind.github,
-            secret="ghp_…",
-            config={"repo": "makeplane/plane"},
+            name="acme-jira",
+            kind=ConnectorKind.jira,
+            secret="jira-api-token",
+            config={"email": "you@acme.com", "project_key": "ENG", "issue_type": "Task"},
+            base_url="https://acme.atlassian.net",
+            is_source=True,
+            is_sink=True,
+            is_default_sink=True,
         )
 ```
 
@@ -180,11 +190,15 @@ async def seed():
 
 ## How it maps internally
 
-`integration_id` on a run → `integrations.service.provider_for()` loads the row, decrypts the
-secret, and `registry.build_provider()` returns the matching `IssueProvider`
-(`GitHubIssueProvider` / `JiraIssueProvider` / `PlaneIssueProvider`). The intake agent calls
-`provider.fetch_issue(item_id)` → a normalized `RawIssue`. **Adding a brand-new source type** means
-adding a provider + a `ProviderKind` value — no changes to the agents or the graph.
+A run references a connector as its source (`integration_id`) and/or sink (`task_sink_id`).
+- **Source:** `integrations.service.provider_for(id)` loads the connector (must have `is_source`),
+  decrypts the secret, and `registry.build_provider()` returns the matching `IssueProvider`
+  (`GitHub` / `Jira` / `Plane`); intake calls `provider.fetch_issue(item_id)` → a `RawIssue`.
+- **Sink:** `sinks.service.resolve_task_sink(...)` picks the connector (explicit → default → file
+  board) and `build_sink()` returns the matching `TicketSink`; PM calls `sink.publish(spec)`.
+
+**Adding a new system** = a new `ConnectorKind` + a provider and/or sink backend — no changes to the
+agents or the graph.
 
 ---
 

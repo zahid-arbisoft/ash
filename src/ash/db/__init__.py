@@ -5,16 +5,14 @@ the list of **integrations** (issue sources) and a lightweight **run registry** 
 """
 
 from ash.db.base import Base, get_session, get_sessionmaker, init_db
-from ash.db.models import AdminUser, Integration, ProviderKind, RunRecord, SinkKind, TaskSink
+from ash.db.models import AdminUser, Connector, ConnectorKind, RunRecord
 
 __all__ = [
     "AdminUser",
     "Base",
-    "Integration",
-    "ProviderKind",
+    "Connector",
+    "ConnectorKind",
     "RunRecord",
-    "SinkKind",
-    "TaskSink",
     "get_session",
     "get_sessionmaker",
     "init_db",

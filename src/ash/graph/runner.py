@@ -10,6 +10,7 @@ import asyncio
 import uuid
 from typing import Any, cast
 
+from langgraph.types import Command
 from pydantic_core import to_jsonable_python
 
 from ash.graph.state import WorkflowState
@@ -58,6 +59,11 @@ class Runner:
             self._tasks.add(task)
             task.add_done_callback(self._tasks.discard)
         return run_id
+
+    async def resume_run(self, run_id: str, decision: Any) -> dict[str, Any] | None:
+        """Resume a run paused at a human-in-the-loop interrupt with the human's decision."""
+        await self._graph.ainvoke(Command(resume=decision), config=self._config(run_id))
+        return await self.get_run(run_id)
 
     async def get_run(self, run_id: str) -> dict[str, Any] | None:
         snapshot = await self._graph.aget_state(self._config(run_id))

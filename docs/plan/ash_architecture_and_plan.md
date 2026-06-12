@@ -512,6 +512,30 @@ Don't remove a gate until the thing under it has earned it.
 
 Per the working agreement (top of doc), every decision/implementation change is logged here.
 
+- **2026-06-12 — Adopted `create_agent` runtime (P0+P1) + HITL resume mechanism (P4) from the
+  agent-runtime plan.** Added `langchain` 1.3.8 + `langchain-mcp-adapters` 0.3.0. **P1:**
+  `BaseAgent.build_agent()` constructs a LangChain `create_agent` (model + tools + `system_prompt`
+  + `response_format`); `generate()` runs it and returns the validated object — every structured
+  agent (PM/Research/Coding) now shares one maintained agent runtime instead of a hand-rolled
+  structured-output call. **P4 mechanism:** `Runner.resume_run` + `POST /runs/{id}/resume`, with a
+  test proving interrupt→resume through the checkpointer (the P0 risk-#1 item). **Still TODO:** P2
+  (give the looping agents real tools so `create_agent` loops), P3 (MCP connector layer — needs live
+  `uvx`/hosted servers to verify), P4 middleware activation (`HumanInTheLoopMiddleware` on dangerous
+  tools + `Autonomy`→`interrupt_on` + UI approve/reject), P5/P6. Verified: ruff + mypy --strict clean
+  (66 files), 61 tests green.
+
+- **2026-06-12 — Unified `Integration` + `TaskSink` → one `Connector` model.** Collapsed the two
+  overlapping tables into a single `connectors` table: a connector has `is_source` / `is_sink`
+  (a system like Jira is configured **once** for both directions) + `is_default_sink`, replacing
+  separate `ProviderKind`/`SinkKind` with one `ConnectorKind` (github/jira/plane/file/sheets). Updated
+  the source registry/service (`build_provider`, `provider_for` checks `is_source`, `create_connector`/
+  `list_connectors`/`get_connector`), the sink service (`resolve_task_sink`/`get_default_sink`/
+  `build_sink`), a single `ConnectorAdmin` at `/admin`, and the UI (`/ui/connectors`; run form lists
+  sources vs sinks by role). Run/state fields keep the names `integration_id` (source) /
+  `task_sink_id` (sink) but now reference connector ids. **No Alembic** → existing `integrations`/
+  `task_sinks` rows are re-entered as connectors. Verified: ruff + mypy --strict clean (65 files),
+  60 tests green.
+
 - **2026-06-12 — Dockerfile dep-layer caching + PM-only config robustness.** (1) Dockerfile split so
   third-party deps install from a stub package keyed only on `pyproject.toml`; the real package is an
   `--no-deps -e .` editable install — code edits no longer trigger a full dependency reinstall (and

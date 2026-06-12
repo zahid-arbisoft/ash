@@ -21,6 +21,12 @@ class RunAccepted(BaseModel):
     run_id: str
 
 
+class ResumeRequest(BaseModel):
+    # the human's decision for a paused run; shape depends on the interrupt
+    # (e.g. "approve" / "reject", or HITL middleware's [{"type": "accept"|"edit"|"reject"}])
+    decision: Any = "approve"
+
+
 class UploadResult(BaseModel):
     paths: list[str]
 

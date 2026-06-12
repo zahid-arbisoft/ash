@@ -4,30 +4,35 @@ from __future__ import annotations
 
 from sqladmin import ModelView
 
-from ash.db.models import AdminUser, Integration, RunRecord, TaskSink
+from ash.db.models import AdminUser, Connector, RunRecord
 
 
-class IntegrationAdmin(ModelView, model=Integration):
-    name = "Integration"
-    name_plural = "Integrations"
+class ConnectorAdmin(ModelView, model=Connector):
+    name = "Connector"
+    name_plural = "Connectors"
     icon = "fa-solid fa-plug"
     column_list = [
-        Integration.id,
-        Integration.name,
-        Integration.kind,
-        Integration.enabled,
-        Integration.created_at,
+        Connector.id,
+        Connector.name,
+        Connector.kind,
+        Connector.is_source,
+        Connector.is_sink,
+        Connector.is_default_sink,
+        Connector.enabled,
     ]
     # secret is intentionally excluded from list views; it is encrypted at rest
     form_columns = [
-        Integration.name,
-        Integration.kind,
-        Integration.base_url,
-        Integration.config,
-        Integration.secret,
-        Integration.enabled,
+        Connector.name,
+        Connector.kind,
+        Connector.base_url,
+        Connector.config,
+        Connector.secret,
+        Connector.is_source,
+        Connector.is_sink,
+        Connector.is_default_sink,
+        Connector.enabled,
     ]
-    column_searchable_list = [Integration.name]
+    column_searchable_list = [Connector.name]
 
 
 class RunRecordAdmin(ModelView, model=RunRecord):
@@ -44,29 +49,6 @@ class RunRecordAdmin(ModelView, model=RunRecord):
         RunRecord.created_at,
     ]
     column_default_sort = [(RunRecord.created_at, True)]
-
-
-class TaskSinkAdmin(ModelView, model=TaskSink):
-    name = "Task sink"
-    name_plural = "Task sinks"
-    icon = "fa-solid fa-inbox"
-    column_list = [
-        TaskSink.id,
-        TaskSink.name,
-        TaskSink.kind,
-        TaskSink.is_default,
-        TaskSink.enabled,
-    ]
-    form_columns = [
-        TaskSink.name,
-        TaskSink.kind,
-        TaskSink.base_url,
-        TaskSink.config,
-        TaskSink.secret,
-        TaskSink.is_default,
-        TaskSink.enabled,
-    ]
-    column_searchable_list = [TaskSink.name]
 
 
 class AdminUserAdmin(ModelView, model=AdminUser):
