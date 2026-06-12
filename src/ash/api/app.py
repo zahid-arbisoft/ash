@@ -19,7 +19,7 @@ from ash.app_context import build_runner
 from ash.config.settings import get_settings
 from ash.db.base import get_engine, init_db
 from ash.graph.checkpointer import checkpointer_from_dsn
-from ash.utils.logging import configure_logging
+from ash.observability.logging import configure_logging
 from ash.web import router as web_router
 
 

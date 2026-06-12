@@ -7,16 +7,18 @@ replace `asyncio.create_task` with an enqueue call without touching the API or g
 from __future__ import annotations
 
 import asyncio
-import logging
 import uuid
 from typing import Any, cast
 
+import structlog
 from langgraph.types import Command
 from pydantic_core import to_jsonable_python
+from structlog.contextvars import bind_contextvars, clear_contextvars
 
 from ash.graph.state import WorkflowState
+from ash.observability.langfuse import get_langfuse_callback
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 
 class Runner:
@@ -24,9 +26,12 @@ class Runner:
         self._graph = graph
         self._tasks: set[asyncio.Task[Any]] = set()
 
-    @staticmethod
-    def _config(thread_id: str) -> dict[str, Any]:
-        return {"configurable": {"thread_id": thread_id}}
+    def _config(self, thread_id: str) -> dict[str, Any]:
+        cfg: dict[str, Any] = {"configurable": {"thread_id": thread_id}}
+        cb = get_langfuse_callback()
+        if cb is not None:
+            cfg["callbacks"] = [cb]
+        return cfg
 
     async def start_run(
         self,
@@ -41,10 +46,6 @@ class Runner:
         wait: bool = False,
     ) -> str:
         run_id = uuid.uuid4().hex
-        logger.info(
-            "run_start run_id=%s intake_mode=%s project=%s item_id=%s integration_id=%s",
-            run_id, intake_mode, project or "(none)", item_id or "(none)", integration_id,
-        )
         initial = WorkflowState(
             run_id=run_id,
             project=project,
@@ -57,11 +58,16 @@ class Runner:
         )
 
         async def _invoke() -> None:
+            clear_contextvars()
+            bind_contextvars(run_id=run_id, intake_mode=intake_mode)
+            logger.info(
+                "run_start", project=project, item_id=item_id, integration_id=integration_id
+            )
             try:
                 await self._graph.ainvoke(initial, config=self._config(run_id))
-                logger.info("run_end run_id=%s status=completed", run_id)
+                logger.info("run_end", status="completed")
             except Exception:
-                logger.exception("run_end run_id=%s status=crashed", run_id)
+                logger.exception("run_end", status="crashed")
 
         if wait:
             await _invoke()
