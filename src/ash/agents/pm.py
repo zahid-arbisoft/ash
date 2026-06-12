@@ -19,6 +19,8 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
+import structlog
+
 from ash.agents.base import BaseAgent
 from ash.clients.board import get_board
 from ash.config.settings import load_project
@@ -27,6 +29,8 @@ from ash.documents import read_documents
 from ash.graph.state import WorkflowState
 from ash.schemas import Spec
 from ash.sinks.service import resolve_task_sink
+
+logger = structlog.get_logger(__name__)
 
 _SYSTEM = """You are a senior product/technical lead acting as a Spec Builder. You receive raw \
 requirements (issue text and/or uploaded documents) and produce a rigorous, implementable \
@@ -74,9 +78,11 @@ class PMAgent(BaseAgent):
             refs = await self._publish_tickets(spec, state, project.runtime_dir / "board")
             note = f"{len(refs)} ticket(s) pushed"
             ticket_refs = [r.url or r.id for r in refs]
+            logger.info("tickets_pushed", count=len(refs))
         except Exception as exc:  # noqa: BLE001 — keep the spec; report the push failure
             note = f"spec ready, but ticket push failed: {type(exc).__name__}: {exc}"
             ticket_refs = []
+            logger.warning("ticket_push_failed", exc_type=type(exc).__name__, error=str(exc))
         if spikes:
             note += f"; spikes for research: {', '.join(spikes)}"
 
