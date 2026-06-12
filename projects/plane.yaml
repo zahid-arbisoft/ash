@@ -16,7 +16,7 @@ work:
   open_upstream_prs: false          # do not contribute upstream while building/testing
   # Path to your existing local clone of zahid-arbisoft/plane.
   # Leave blank to set it via LOCAL_REPO_PATH in .env instead.
-  local_repo_path: ""
+  local_repo_path: "/Users/zahid.ali/Documents/python/oss/plane"
 
 # Human-in-the-loop, toggleable (plan §7b). Flip to false for unattended runs.
 autonomy:

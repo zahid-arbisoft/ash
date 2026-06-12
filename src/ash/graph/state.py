@@ -24,6 +24,7 @@ IntakeMode = Literal["spec_ready", "raw_to_spec", "raw_to_dev"]
 class PMState(BaseModel):
     spec: Spec | None = None
     board_ref: str | None = None
+    ticket_refs: list[str] = Field(default_factory=list)  # where pushed tickets live (urls/ids)
     comment_url: str | None = None  # set when the deferred post-comment feature lands
     note: str | None = None
     error: str | None = None
@@ -69,6 +70,8 @@ class WorkflowState(BaseModel):
     # intake configuration (set at run start)
     intake_mode: IntakeMode = "raw_to_spec"
     integration_id: int | None = None
+    attachments: list[str] = Field(default_factory=list)  # uploaded spec files PM should read
+    task_sink_id: int | None = None  # where PM pushes tickets (None → admin default → file board)
 
     # discovered during the run
     raw_issue: RawIssue | None = None

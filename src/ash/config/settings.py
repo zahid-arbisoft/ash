@@ -155,8 +155,9 @@ class Budget(BaseModel):
 
 class ProjectConfig(BaseModel):
     name: str
-    issues: IssueSource
-    work: WorkTarget
+    # both optional: a PM-only / attachments run needs neither an issue source nor a work target
+    issues: IssueSource | None = None
+    work: WorkTarget | None = None
     autonomy: Autonomy = Field(default_factory=Autonomy)
     budget: Budget = Field(default_factory=Budget)
     schedule: dict[str, Any] = Field(default_factory=dict)
@@ -175,6 +176,6 @@ def load_project(name: str) -> ProjectConfig:
     data = yaml.safe_load(path.read_text())
     cfg = ProjectConfig.model_validate(data)
     env_path = os.getenv("LOCAL_REPO_PATH")
-    if env_path and not cfg.work.local_repo_path:
+    if env_path and cfg.work is not None and not cfg.work.local_repo_path:
         cfg.work.local_repo_path = env_path
     return cfg

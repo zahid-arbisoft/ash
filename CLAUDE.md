@@ -54,12 +54,16 @@ client/target #1; SaaS packaging is a later layer that must not change the agent
   Quality gates: ruff + **mypy --strict** + pytest, enforced in CI + pre-commit.
 
 ## Current status
-- **Re-architected (2026-06-11)** to FastAPI + async + LangGraph + Postgres + LangChain (decisions
-  #15–#18; #14 Django removed), then added **integrations + admin + UI** (decision #19): pluggable
-  GitHub/Jira/Plane issue sources, per-run intake routing (Intake→[PM?]→Research→Coding→Reviewer→
-  Fixer→Merge), SQLAdmin at `/admin`, Jinja2 UI at `/`. PM/Research/Coding real; Reviewer/Fixer stubs.
-- Verified: ruff clean, **mypy --strict clean (54 files)**, **39 pytest tests green**, app/UI/admin
-  import. Live Postgres/LLM/Jira/Plane runs pending real `.env` credentials.
-- **Open follow-ups:** Alembic migrations (tables are `create_all` now), wire comment-back into a
-  node, real Reviewer (maker/checker), bounded Fixer loop, move worktree cleanup Coding→Merge,
-  deepen code grounding (don't trust generated code yet). Keep human gates until each layer earns it.
+- **Re-architected (2026-06-11)** to FastAPI + async + LangGraph + Postgres + LangChain; added
+  **integrations + admin + UI** (decision #19), then **PM agent v2** (2026-06-12).
+- **PM v2:** ingests issue text and/or **uploaded files** (pdf/docx/md via `documents/reader.py` +
+  LangChain community loaders); raw→`Spec`→Board; **pushes tickets to a task sink** (`sinks/`:
+  file/Jira/Plane; DB `TaskSink` rows, per-run choice → admin default → file board); flags **spikes**
+  (`TicketType.spike` + `Ticket.needs_research`) for Research. `POST /uploads` + UI file picker.
+- **Planned next (see `docs/plan/agent_runtime_and_connectors_plan.md`):** adopt `create_agent` for
+  looping agents + `HumanInTheLoopMiddleware` (+ `/runs/{id}/resume`); migrate connectors to **MCP**
+  (Integration→Connector); MCP-backed Jira/Plane/Sheets sinks. `deepagents` deferred.
+- Verified: ruff clean, **mypy --strict clean (65 files)**, **58 pytest tests green**. Live
+  Postgres/LLM/Jira/Plane runs pending real `.env` credentials.
+- **Open follow-ups:** the create_agent/MCP/HITL phase above; Alembic migrations (tables are
+  `create_all`); real Reviewer (maker/checker) + bounded Fixer; deepen code grounding.

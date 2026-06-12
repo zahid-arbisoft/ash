@@ -3,7 +3,7 @@
 {% block body %}
 <h1>Start a run</h1>
 <div class="card">
-  <form method="post" action="/ui/runs">
+  <form method="post" action="/ui/runs" enctype="multipart/form-data">
     <label for="project">Project (work target / autonomy)</label>
     <select id="project" name="project" required>
       {% for p in projects %}<option value="{{ p }}">{{ p }}</option>{% endfor %}
@@ -11,14 +11,25 @@
 
     <label for="integration_id">Issue source (integration)</label>
     <select id="integration_id" name="integration_id">
-      <option value="">— legacy GitHub (from project config) —</option>
+      <option value="">— none / attachments only —</option>
       {% for i in integrations %}
         <option value="{{ i.id }}">{{ i.name }} ({{ i.kind.value }})</option>
       {% endfor %}
     </select>
 
-    <label for="item_id">Item id (issue number / Jira key / Plane id)</label>
-    <input id="item_id" name="item_id" placeholder="e.g. 9213 or ENG-42" required>
+    <label for="item_id">Item id (issue number / Jira key / Plane id) — leave blank if uploading files</label>
+    <input id="item_id" name="item_id" placeholder="e.g. 9213 or ENG-42 (or blank for upload)">
+
+    <label for="attachments">Spec files (optional) — pdf / docx / md / txt</label>
+    <input id="attachments" name="attachments" type="file" multiple>
+
+    <label for="task_sink_id">Push tickets to (task sink)</label>
+    <select id="task_sink_id" name="task_sink_id">
+      <option value="">— admin default (or local board) —</option>
+      {% for s in sinks %}
+        <option value="{{ s.id }}">{{ s.name }} ({{ s.kind.value }}){{ ' · default' if s.is_default else '' }}</option>
+      {% endfor %}
+    </select>
 
     <label for="intake_mode">Intake mode</label>
     <select id="intake_mode" name="intake_mode">

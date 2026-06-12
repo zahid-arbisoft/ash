@@ -9,14 +9,20 @@ from pydantic import BaseModel
 
 class RunRequest(BaseModel):
     project: str
-    item_id: str
+    item_id: str = "upload"  # "upload" / "-" for attachment-only runs (no issue to fetch)
     board: str = "github"
     intake_mode: str = "raw_to_spec"  # raw_to_spec | spec_ready | raw_to_dev
     integration_id: int | None = None
+    attachments: list[str] = []  # paths returned by POST /uploads
+    task_sink_id: int | None = None  # where PM pushes tickets (None → default → file board)
 
 
 class RunAccepted(BaseModel):
     run_id: str
+
+
+class UploadResult(BaseModel):
+    paths: list[str]
 
 
 class RunStatus(BaseModel):

@@ -39,6 +39,7 @@ class TicketType(str, Enum):
     test = "test"
     docs = "docs"
     chore = "chore"
+    spike = "spike"  # investigation needed before implementation (handed to Research)
 
 
 class Ticket(BaseModel):
@@ -46,6 +47,11 @@ class Ticket(BaseModel):
     title: str
     description: str
     type: TicketType
+    needs_research: bool = Field(
+        default=False,
+        description="True if this ticket needs a research spike before it can be implemented; "
+        "the Research agent picks these up. PM sets this for unclear/risky work.",
+    )
     acceptance_criteria: list[str] = Field(default_factory=list)
     dependencies: list[str] = Field(
         default_factory=list, description="ids of tickets that must land first"

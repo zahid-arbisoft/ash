@@ -51,17 +51,17 @@ class ResearchAgent(BaseAgent):
             return {"research": {"note": "skipped: no spec or raw issue to work from"}}
 
         project = load_project(state.project)
-        local = project.work.resolved_local_path()
-        if local is None or not local.exists():
+        work = project.work
+        local = work.resolved_local_path() if work else None
+        if work is None or local is None or not local.exists():
             return {
                 "research": {
                     "note": "skipped: no local clone available "
-                    f"(set work.local_repo_path or LOCAL_REPO_PATH to a clone of "
-                    f"{project.work.target_repo})"
+                    "(configure work.local_repo_path / LOCAL_REPO_PATH for this project)"
                 }
             }
 
-        ws = RepoWorkspace(project.work, project.runtime_dir / "worktrees")
+        ws = RepoWorkspace(work, project.runtime_dir / "worktrees")
         await asyncio.to_thread(ws.ensure_upstream)
         base_ref = await asyncio.to_thread(ws.sync_base)
         branch = ws.branch_name_from(state.item_id, state.issue_title)

@@ -512,6 +512,46 @@ Don't remove a gate until the thing under it has earned it.
 
 Per the working agreement (top of doc), every decision/implementation change is logged here.
 
+- **2026-06-12 — Dockerfile dep-layer caching + PM-only config robustness.** (1) Dockerfile split so
+  third-party deps install from a stub package keyed only on `pyproject.toml`; the real package is an
+  `--no-deps -e .` editable install — code edits no longer trigger a full dependency reinstall (and
+  with the `.:/app` bind mount, code changes need only `docker compose restart api`, not a rebuild).
+  (2) `ProjectConfig.issues`/`work` are now **optional** so a `name`-only project supports PM-only /
+  attachments runs; Research/Coding/intake/CLI guard the `None` cases. (3) `/ui/runs` form handler
+  defaults `item_id`/`intake_mode` so a blank item id can't 422. ruff + mypy --strict clean, 59 tests.
+
+- **2026-06-12 — PM agent v2 implemented (file ingestion, task sinks, spikes, uploads).** Shipped
+  the PM v2 behavior from §8b of the runtime plan (the create_agent/MCP migration remains next):
+  - **File ingestion:** `documents/reader.py` reads uploaded specs (md/txt/pdf/docx/html) via
+    LangChain community loaders (`langchain-community` + `pypdf` + `docx2txt`). PM ingests issue text
+    **and/or** attachments.
+  - **Task sinks:** new `TaskSink` DB model (kind file/jira/plane/sheets, encrypted secret,
+    `is_default`, enabled) + `sinks/` backends — `FileBoardSink` (default), `JiraTaskSink`,
+    `PlaneTaskSink` (httpx create-issue). Per-run selection: explicit `task_sink_id` → admin default
+    → local file board (`sinks/service.resolve_task_sink`); new admin `TaskSink` view.
+  - **PM v2:** raw/attachments → `Spec` (board) → **tickets pushed to the selected sink**
+    (`ticket_refs` recorded). Spikes: `TicketType.spike` + `Ticket.needs_research`; PM flags them and
+    notes them for Research (which already consumes the spec).
+  - **Uploads:** `POST /uploads` (multipart) + UI file picker + sink dropdown; `WorkflowState`/
+    `RunRequest` gain `attachments` + `task_sink_id`; intake skips remote fetch for attachment-only
+    runs. **MCP-backed sinks + create_agent + HITL still pending** (next phase).
+  - Verified: ruff + mypy --strict clean (65 files), **58 tests green**. Live Jira/Plane pushes
+    pending real creds.
+
+- **2026-06-12 — Plan (no code): adopt `create_agent` + middleware + MCP connectors.** Wrote
+  [`docs/plan/agent_runtime_and_connectors_plan.md`](agent_runtime_and_connectors_plan.md): upgrade
+  to LangChain 1.x (≥1.1) + `langchain-mcp-adapters`; make every agent (incl. a minimal PM) a nested
+  `create_agent` inside the orchestration graph; back `ApprovalGate` with `HumanInTheLoopMiddleware`
+  + a `POST /runs/{id}/resume` endpoint; replace bespoke GitHub/Jira/Plane providers with **MCP
+  servers** (reframing the `Integration` registry → `Connector`, reusing DB/encryption/admin/UI);
+  `deepagents` deferred. Phased migration P0–P6; implementation pending sign-off.
+- **2026-06-12 — Plan extended: PM agent v2 (§8b of the runtime plan).** PM grows to: (R1) ingest
+  requirements from uploaded files (pdf/md/doc/…) via a `documents` reader (`markitdown`); (R2) two
+  modes — raw→spec, and spec→tickets pushed to the user's task tool (Plane/Jira/Google Sheet) via a
+  `TaskSink` (default file board; Plane/Jira via MCP write tools); (R3) mark tickets as **spikes**
+  (`TicketType.spike` + `Ticket.needs_research`) handed to the Research agent. Forks (push
+  mechanism, Sheets scope, upload mechanism, sequencing) being confirmed before code.
+
 - **2026-06-11 — Fix: board specs invisible on host (docker-compose runtime volume).** A named
   volume `ash-runtime:/app/runtime` shadowed the project bind mount, so PM board files
   (`runtime/<proj>/board/issue-*.md`) were written into the Docker volume, not the host `./runtime`.

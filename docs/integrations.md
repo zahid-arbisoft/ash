@@ -118,6 +118,42 @@ Chosen per run (UI dropdown or `intake_mode` in the API):
 
 ---
 
+## Task sinks — where PM pushes the generated tickets
+
+After PM produces a spec, it breaks it into tickets and **pushes them to a task sink**. Sinks are
+DB rows managed in the admin portal (`/admin` → **Task sinks**), with secrets encrypted at rest:
+
+| Field | Value | Notes |
+|---|---|---|
+| `name` | any label | |
+| `kind` | `file` / `jira` / `plane` / `sheets` | `file` = local board (default); `sheets` later |
+| `base_url` | site URL | required for Jira; Plane defaults to cloud |
+| `config` | `{"project_key": "ENG", "email": "..."}` (Jira) / `{"workspace_slug": "...", "project_id": "..."}` (Plane) | |
+| `secret` | API token | encrypted |
+| `is_default` | ✓ on one row | used when a run doesn't pick a sink (or runs autonomously) |
+
+**Selection per run:** explicit choice (UI dropdown / `task_sink_id` in the API) → else the
+**admin default** → else the **local file board** (`runtime/<project>/board/`).
+
+## Uploading spec files (PM reads them)
+
+PM can build a spec from **uploaded documents** (`pdf` / `docx` / `md` / `txt` / `html`), not just
+issue text:
+
+- **UI:** the start-run form (`/ui/runs/new`) has a file picker — leave *item id* blank for an
+  attachments-only run.
+- **API:** upload first, then start the run with the returned paths:
+  ```bash
+  curl -F 'files=@spec.pdf' localhost:8000/uploads        # -> {"paths": ["/app/runtime/uploads/…/spec.pdf"]}
+  curl -X POST localhost:8000/runs -H 'content-type: application/json' \
+    -d '{"project":"plane","item_id":"upload","attachments":["/app/runtime/uploads/…/spec.pdf"],"task_sink_id":1}'
+  ```
+
+**Spikes:** PM marks any ticket needing investigation as a **spike** (`type: spike`,
+`needs_research: true`); the Research agent picks those up from the spec.
+
+---
+
 ## Programmatic / seeding alternative
 
 To script integration creation (e.g. a seed task) instead of the portal:

@@ -3,7 +3,8 @@
 FROM python:3.12-slim
 
 ENV PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
 
 # git is required by GitPython (worktree ops)
 RUN apt-get update && apt-get install -y --no-install-recommends git \
@@ -11,13 +12,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends git \
 
 WORKDIR /app
 
-# Install deps first (better layer caching)
+# 1) Dependency layer — only re-runs when pyproject.toml changes (NOT on code edits).
+#    A throwaway stub package lets pip build metadata + install all third-party deps
+#    without the real source, so this expensive layer stays cached across code changes.
 COPY pyproject.toml ./
-COPY src ./src
-RUN pip install --no-cache-dir -e .
+RUN mkdir -p src/ash && touch src/ash/__init__.py \
+    && pip install --no-cache-dir . \
+    && rm -rf src build ./*.egg-info src/*.egg-info
 
-# Copy the rest (projects/, skills/, etc.)
+# 2) Editable install of the real package — fast, no downloads (--no-deps), reuses the
+#    cached deps layer above. Only this cheap step re-runs when source changes.
 COPY . .
+RUN pip install --no-cache-dir --no-deps -e .
 
 EXPOSE 8000
 

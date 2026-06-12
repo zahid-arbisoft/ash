@@ -32,6 +32,8 @@ class Runner:
         board: str = "github",
         intake_mode: str = "raw_to_spec",
         integration_id: int | None = None,
+        attachments: list[str] | None = None,
+        task_sink_id: int | None = None,
         wait: bool = False,
     ) -> str:
         run_id = uuid.uuid4().hex
@@ -42,6 +44,8 @@ class Runner:
             board=board,
             intake_mode=intake_mode,  # type: ignore[arg-type]
             integration_id=integration_id,
+            attachments=attachments or [],
+            task_sink_id=task_sink_id,
         )
 
         async def _invoke() -> None:

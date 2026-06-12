@@ -1,9 +1,17 @@
-"""PM agent (real) — raw issue → structured spec → Board sink.
+"""PM agent (v2) — requirements → spec → tickets pushed to the user's task tool.
 
-The highest-leverage agent: weak specs break everything downstream. It takes the `RawIssue` that
-the intake node fetched, generates a rigorous `Spec` (structured output), and publishes it to the
-Board (specs go to the Board, not the PR — plan §4c). Posting the spec back as a comment is a
-deferred feature (the integration's `post_comment` seam already exists).
+Responsibilities:
+- **Ingest** requirements from the issue text *and/or* uploaded files (pdf/docx/md/… via the
+  documents reader).
+- **Spec:** use a provided spec (`spec_ready`) or generate one from the requirements; publish it to
+  the Board for oversight.
+- **Tickets:** break the spec into tickets and **push them to the selected task sink** (Plane / Jira
+  / file board) — explicit per-run choice, else the admin-managed default, else the local board.
+- **Spikes:** tickets PM marks `needs_research` are flagged so the Research agent can pick them up.
+
+NOTE: PM's spec step is a single structured-output call (deterministic, easily tested). Converting
+the looping agents (Research/Coding/Reviewer/Fixer) to `create_agent` is the next phase (see
+docs/plan/agent_runtime_and_connectors_plan.md).
 """
 
 from __future__ import annotations
@@ -14,57 +22,82 @@ from typing import Any
 from ash.agents.base import BaseAgent
 from ash.clients.board import get_board
 from ash.config.settings import load_project
+from ash.db.base import get_sessionmaker
+from ash.documents import read_documents
 from ash.graph.state import WorkflowState
-from ash.integrations.base import RawIssue
 from ash.schemas import Spec
+from ash.sinks.service import resolve_task_sink
 
-_SYSTEM = """You are a senior product/technical lead acting as a Spec Builder for a software \
-project. You receive a single issue and produce a rigorous, implementable specification.
+_SYSTEM = """You are a senior product/technical lead acting as a Spec Builder. You receive raw \
+requirements (issue text and/or uploaded documents) and produce a rigorous, implementable \
+specification.
 
 Your spec must:
-- Restate the problem and the desired outcome in clear language (don't just echo the issue).
+- Restate the problem and desired outcome in clear language (don't just echo the input).
 - Define concrete, testable acceptance criteria.
-- Surface edge cases the issue author likely didn't consider.
+- Surface edge cases the author likely didn't consider.
 - Propose a sound technical approach and name the areas of the codebase likely affected.
 - Break the work into small, independently shippable tickets with explicit dependencies.
+- Mark any ticket that needs investigation before implementation as a SPIKE: set its type to \
+"spike" and `needs_research` to true (the Research agent will pick those up).
 - Assess risks honestly with severity and mitigations.
 
-Be specific and grounded. Prefer the smallest change that fully satisfies the issue. If the issue \
-is ambiguous, state your assumptions explicitly in the epic summary rather than inventing scope."""
+Be specific and grounded. Prefer the smallest change that fully satisfies the requirements."""
 
-_USER = """Produce a specification for the following issue.
+_USER = """Produce a specification from the following requirements.
 
-Source: {source}
-Item {item_id}: {title}
-Labels: {labels}
+{context}
 
---- Issue body ---
-{body}
---- end body ---"""
+--- end requirements ---"""
 
 
 class PMAgent(BaseAgent):
     name = "pm"
 
     async def run(self, state: WorkflowState) -> dict[str, Any]:
-        raw = state.raw_issue
-        if raw is None:
-            return {"pm": {"error": "no raw issue from intake"}}
-
-        spec = await self._build_spec(raw)
-
         project = load_project(state.project)
+
+        spec = state.pm.spec  # already set for spec_ready intake
+        if spec is None:
+            context = await self._gather(state)
+            if not context.strip():
+                return {"pm": {"error": "no requirements: provide an issue or attachments"}}
+            spec = await self.generate(Spec, system=_SYSTEM, user=_USER.format(context=context))
+
+        item_id = state.item_id or "upload"
         board = get_board(project.runtime_dir / "board")
-        board_ref = await asyncio.to_thread(board.publish_spec, raw.id, raw.url, spec)
+        board_ref = await asyncio.to_thread(board.publish_spec, item_id, state.issue_url, spec)
 
-        return {"pm": {"spec": spec, "board_ref": board_ref}}
+        # Pushing tickets is secondary: a sink failure must NOT discard the generated spec.
+        spikes = [t.id for t in spec.tickets if t.needs_research]
+        try:
+            refs = await self._publish_tickets(spec, state, project.runtime_dir / "board")
+            note = f"{len(refs)} ticket(s) pushed"
+            ticket_refs = [r.url or r.id for r in refs]
+        except Exception as exc:  # noqa: BLE001 — keep the spec; report the push failure
+            note = f"spec ready, but ticket push failed: {type(exc).__name__}: {exc}"
+            ticket_refs = []
+        if spikes:
+            note += f"; spikes for research: {', '.join(spikes)}"
 
-    async def _build_spec(self, raw: RawIssue) -> Spec:
-        user = _USER.format(
-            source=raw.source or "unknown",
-            item_id=raw.id,
-            title=raw.title,
-            labels=", ".join(raw.labels) or "(none)",
-            body=raw.body.strip() or "(no description provided)",
-        )
-        return await self.generate(Spec, system=_SYSTEM, user=user)
+        return {
+            "pm": {
+                "spec": spec,
+                "board_ref": board_ref,
+                "ticket_refs": ticket_refs,
+                "note": note,
+            }
+        }
+
+    async def _gather(self, state: WorkflowState) -> str:
+        parts: list[str] = []
+        if state.raw_issue is not None:
+            parts.append(f"# {state.raw_issue.title}\n\n{state.raw_issue.body}")
+        if state.attachments:
+            parts.append(await asyncio.to_thread(read_documents, state.attachments))
+        return "\n\n".join(p for p in parts if p.strip())
+
+    async def _publish_tickets(self, spec: Spec, state: WorkflowState, board_dir: Any) -> list[Any]:
+        async with get_sessionmaker()() as session:
+            sink = await resolve_task_sink(session, sink_id=state.task_sink_id, board_dir=board_dir)
+        return await sink.publish(spec)

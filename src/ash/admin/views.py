@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from sqladmin import ModelView
 
-from ash.db.models import AdminUser, Integration, RunRecord
+from ash.db.models import AdminUser, Integration, RunRecord, TaskSink
 
 
 class IntegrationAdmin(ModelView, model=Integration):
@@ -44,6 +44,29 @@ class RunRecordAdmin(ModelView, model=RunRecord):
         RunRecord.created_at,
     ]
     column_default_sort = [(RunRecord.created_at, True)]
+
+
+class TaskSinkAdmin(ModelView, model=TaskSink):
+    name = "Task sink"
+    name_plural = "Task sinks"
+    icon = "fa-solid fa-inbox"
+    column_list = [
+        TaskSink.id,
+        TaskSink.name,
+        TaskSink.kind,
+        TaskSink.is_default,
+        TaskSink.enabled,
+    ]
+    form_columns = [
+        TaskSink.name,
+        TaskSink.kind,
+        TaskSink.base_url,
+        TaskSink.config,
+        TaskSink.secret,
+        TaskSink.is_default,
+        TaskSink.enabled,
+    ]
+    column_searchable_list = [TaskSink.name]
 
 
 class AdminUserAdmin(ModelView, model=AdminUser):

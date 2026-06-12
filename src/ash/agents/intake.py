@@ -26,6 +26,10 @@ class IntakeAgent(BaseAgent):
         self._provider = provider
 
     async def run(self, state: WorkflowState) -> dict[str, Any]:
+        # attachments-only run (no issue to fetch): PM works from the uploaded files
+        if not state.item_id or state.item_id in {"upload", "-"}:
+            return {"intake": {"note": "attachments-only run (no issue fetched)"}}
+
         provider = self._provider or await self._resolve(state)
         raw = await provider.fetch_issue(state.item_id)
         update: dict[str, Any] = {
@@ -44,6 +48,11 @@ class IntakeAgent(BaseAgent):
             return await provider_for(state.integration_id)
         # legacy fallback: derive a GitHub provider from the project's source repo
         project = load_project(state.project)
+        if project.issues is None:
+            raise ValueError(
+                "no integration selected and project has no issues source; "
+                "pass integration_id, or run attachments-only (blank item id)"
+            )
         return GitHubIssueProvider(
             token=self.settings.github_token,
             config={"repo": project.issues.source_repo},

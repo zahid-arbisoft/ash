@@ -23,11 +23,15 @@ from ash.config.settings import get_settings, load_project
 
 async def _list(project_name: str, limit: int) -> int:
     project = load_project(project_name)
+    if project.issues is None:
+        print(f"project '{project_name}' has no issues source configured", file=sys.stderr)
+        return 2
+    issues_cfg = project.issues
     settings = get_settings()
     async with httpx.AsyncClient(timeout=30) as http:
-        gh = GitHubClient(token=settings.github_token, repo=project.issues.source_repo, http=http)
-        issues = await gh.list_issues(filters=project.issues.filters, limit=limit)
-    print(f"Open issues in {project.issues.source_repo}:\n")
+        gh = GitHubClient(token=settings.github_token, repo=issues_cfg.source_repo, http=http)
+        issues = await gh.list_issues(filters=issues_cfg.filters, limit=limit)
+    print(f"Open issues in {issues_cfg.source_repo}:\n")
     for it in issues:
         labels = f"  [{', '.join(it.labels)}]" if it.labels else ""
         print(f"  #{it.number}  {it.title}{labels}")

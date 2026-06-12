@@ -46,8 +46,11 @@ class CodingAgent(BaseAgent):
             return {"coding": {"note": "skipped: no plan/worktree from research"}}
 
         project = load_project(state.project)
+        if project.work is None:
+            return {"coding": {"note": "skipped: project has no work target"}}
+        work = project.work
         wt_path = Path(wt)
-        ws = RepoWorkspace(project.work, project.runtime_dir / "worktrees")
+        ws = RepoWorkspace(work, project.runtime_dir / "worktrees")
         try:
             change = await self._code(wt_path, brief, plan)
             if not change.edits:
@@ -67,8 +70,8 @@ class CodingAgent(BaseAgent):
             )
             pr_url = await asyncio.to_thread(
                 create_pr,
-                target_repo=project.work.target_repo,
-                base=project.work.base_branch,
+                target_repo=work.target_repo,
+                base=work.base_branch,
                 head=branch,
                 title=f"[agent] Fix #{state.item_id}: {state.issue_title}",
                 body=body,

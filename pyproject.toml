@@ -25,6 +25,10 @@ dependencies = [
     "jinja2>=3.1",
     "python-multipart>=0.0.9",
     "itsdangerous>=2.2",
+    # document ingestion for the PM agent (pdf/docx/md/txt → text via LangChain loaders)
+    "langchain-community>=0.3",
+    "pypdf>=5.0",
+    "docx2txt>=0.8",
 ]
 
 [project.optional-dependencies]
@@ -74,7 +78,10 @@ mypy_path = "src"
 packages = ["ash"]
 # third-party libs without bundled type stubs
 [[tool.mypy.overrides]]
-module = ["git", "git.*", "langgraph.*", "langchain_anthropic.*", "langchain_openai.*", "sqladmin.*"]
+module = [
+    "git", "git.*", "langgraph.*", "langchain_anthropic.*", "langchain_openai.*",
+    "sqladmin.*", "langchain_community.*", "docx2txt.*",
+]
 ignore_missing_imports = true
 
 # ── pytest ──
