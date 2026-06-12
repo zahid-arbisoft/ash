@@ -25,8 +25,9 @@ client/target #1; SaaS packaging is a later layer that must not change the agent
    `if human:` checks.
 3. **Triggers (inputs) and sinks (outputs) are pluggable connectors**, selected in config — not code
    changes. Don't hardwire "GitHub issue in, JSON out".
-3b. **Specs → Board, code → PR** (§4c). Specs/tickets publish to a Board sink (file today;
-   Jira/Plane/Trello later) for client oversight; PRs carry **implementation only**.
+3b. **Specs → local record + integration; code → PR** (§4c). PM always writes a local `.md`/`.json`
+   spec to `runtime/board/`. Tickets are created in the selected integration (Plane/GitHub/Jira via
+   `create_issue`) when `integration_id` is set. PRs carry **implementation only**.
 4. **Repo topology is per-project**: `fork` / `single` / `closed-source(private)`.
 5. **Sequencing discipline:** do NOT build triggers/sinks/UI until the core loop (Phases 0–3) is
    trustworthy. Keep human verification gates until the layer below has earned removal.
@@ -46,10 +47,12 @@ client/target #1; SaaS packaging is a later layer that must not change the agent
   `POST /runs` / `GET /runs/{id}`); orchestration = **LangGraph** (`src/ash/graph`, conditional
   intake routing); run state = **Postgres checkpointer** (AsyncPostgresSaver). App DB = **SQLAlchemy
   async** (`src/ash/db`) for integrations + run registry; secrets **encrypted at rest** (Fernet via
-  `db/crypto.EncryptedString`, key = `SECRET_KEY`). Issue sources = pluggable **integrations**
-  (`src/ash/integrations`: GitHub/Jira/Plane behind `IssueProvider`). FE = **Jinja2** at `/`
-  (`src/ash/web`); admin = **SQLAdmin** at `/admin` (`src/ash/admin`, env creds). Per-run
-  `intake_mode` (`raw_to_spec`/`spec_ready`/`raw_to_dev`) routes use/skip PM. Tools are 3-layer:
+  `db/crypto.EncryptedString`, key = `SECRET_KEY`). Issue sources + ticket creation = pluggable
+  **integrations** (`src/ash/integrations`: GitHub/Jira/Plane behind `IssueProvider` with
+  `fetch_issue`, `create_issue`, `post_comment`). FE = **Jinja2** at `/` (`src/ash/web`); admin =
+  **SQLAdmin** at `/admin` (`src/ash/admin`, env creds). Per-run `intake_mode`
+  (`raw_to_spec`/`spec_ready`/`raw_to_dev`/`spec_file`) routes use/skip PM. `spec_file` mode accepts
+  `.md`/`.txt`/`.pdf`/`.docx` uploads; `utils/file_extract` converts to Markdown. Tools are 3-layer:
   `clients/` → `toolkits/` → agents. Config is hybrid: `pydantic-settings` + `projects/<name>.yaml`.
   Quality gates: ruff + **mypy --strict** + pytest, enforced in CI + pre-commit.
 
@@ -58,8 +61,11 @@ client/target #1; SaaS packaging is a later layer that must not change the agent
   #15–#18; #14 Django removed), then added **integrations + admin + UI** (decision #19): pluggable
   GitHub/Jira/Plane issue sources, per-run intake routing (Intake→[PM?]→Research→Coding→Reviewer→
   Fixer→Merge), SQLAdmin at `/admin`, Jinja2 UI at `/`. PM/Research/Coding real; Reviewer/Fixer stubs.
-- Verified: ruff clean, **mypy --strict clean (54 files)**, **39 pytest tests green**, app/UI/admin
-  import. Live Postgres/LLM/Jira/Plane runs pending real `.env` credentials.
+- **2026-06-12:** Added `spec_file` intake mode (upload `.md`/`.txt`/`.pdf`/`.docx` via admin,
+  PM converts to Spec via LLM); `create_issue` on all integrations (PM creates tickets in selected
+  integration after spec generation); structured logging across runner/nodes/agents; board_sink
+  removed as a configurable parameter (local write is a fixed side-effect).
+- Verified: ruff clean, **mypy --strict clean (60 files)**, **65 pytest tests green**.
 - **Open follow-ups:** Alembic migrations (tables are `create_all` now), wire comment-back into a
   node, real Reviewer (maker/checker), bounded Fixer loop, move worktree cleanup Coding→Merge,
   deepen code grounding (don't trust generated code yet). Keep human gates until each layer earns it.

@@ -7,12 +7,15 @@ replace `asyncio.create_task` with an enqueue call without touching the API or g
 from __future__ import annotations
 
 import asyncio
+import logging
 import uuid
 from typing import Any, cast
 
 from pydantic_core import to_jsonable_python
 
 from ash.graph.state import WorkflowState
+
+logger = logging.getLogger(__name__)
 
 
 class Runner:
@@ -27,25 +30,35 @@ class Runner:
     async def start_run(
         self,
         *,
-        project: str,
-        item_id: str,
+        project: str = "",
+        item_id: str | None = None,
         board: str = "github",
         intake_mode: str = "raw_to_spec",
         integration_id: int | None = None,
+        spec_file_path: str | None = None,
         wait: bool = False,
     ) -> str:
         run_id = uuid.uuid4().hex
+        logger.info(
+            "run_start run_id=%s intake_mode=%s project=%s item_id=%s integration_id=%s",
+            run_id, intake_mode, project or "(none)", item_id or "(none)", integration_id,
+        )
         initial = WorkflowState(
             run_id=run_id,
             project=project,
-            item_id=item_id,
+            item_id=item_id or "",
             board=board,
             intake_mode=intake_mode,  # type: ignore[arg-type]
             integration_id=integration_id,
+            spec_file_path=spec_file_path,
         )
 
         async def _invoke() -> None:
-            await self._graph.ainvoke(initial, config=self._config(run_id))
+            try:
+                await self._graph.ainvoke(initial, config=self._config(run_id))
+                logger.info("run_end run_id=%s status=completed", run_id)
+            except Exception:
+                logger.exception("run_end run_id=%s status=crashed", run_id)
 
         if wait:
             await _invoke()

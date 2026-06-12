@@ -25,6 +25,7 @@ async def start_run(req: RunRequest, request: Request) -> RunAccepted:
         board=req.board,
         intake_mode=req.intake_mode,
         integration_id=req.integration_id,
+        spec_file_path=req.spec_file_path,
     )
     return RunAccepted(run_id=run_id)
 

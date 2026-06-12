@@ -35,7 +35,7 @@ unlimited resources.** Its "staff" are agents (PM, Researcher, Dev, QA, Docs, Re
 | Engagement / project | a unit of work for a client | the Plane project |
 | Staff | agent roles (PM, Research, Dev, QA, Docs, Reviewer, Fixer) | same |
 | Intake | how work enters (issues, UI, board, chat) | GitHub issues |
-| **Board** | where **specs/tickets** live for client visibility (Jira/Plane/Trello/file) | `.md`/`.json` (for now) |
+| **Board** | where **specs/tickets** live for client visibility — local `.md`/`.json` always; live tracker (Plane/GitHub/Jira) when integration selected | local `runtime/board/` + optional integration |
 | **Delivery** | **implementation** as a PR → review → merge to base | fork PRs |
 | Oversight | human feedback gates at each step | `ApprovalGate` |
 
@@ -189,26 +189,29 @@ pipeline:
 - Implemented later (tracked in §5 Phase 1.5 / backlog), but designed for now so the graph supports
   optional nodes from the start.
 
-### 4c. Separation: specs go to the Board, code goes to the PR
+### 4c. Separation: specs go to trackers, code goes to the PR
 
 A spec is a *planning artifact for the client*; a PR is *delivered implementation*. They have
 different destinations and different lifecycles.
 
 ```
-PM Agent ──► SPEC ──► Board sink            (Jira / Plane / Trello / .md|.json file)
-                       └─ client sees/edits/approves tickets here (oversight)
+PM Agent ──► SPEC ──► local runtime/board/    (always — .md + .json record)
+                  └──► integration tracker     (optional — Plane/GitHub/Jira via create_issue)
+                       └─ client sees/approves tickets here (oversight)
 
-Build team ─► CODE ─► Delivery sink (PR)    (branch → fork PR → review → merge to base)
+Build team ─► CODE ─► Delivery sink (PR)      (branch → fork PR → review → merge to base)
                        └─ Reviewer/Fixer/human act here
 ```
 
-- **Board sink** (specs/tickets): selected per client in config (`board:`). Today a local
-  `.md`/`.json`; later Jira/Plane/Trello via connectors (§8). The PR must **not** be the spec's home.
+- **Local spec record:** PM always writes the spec as `.md`/`.json` to `runtime/board/` as a local
+  audit trail. This is a fixed side-effect, not a configurable sink.
+- **Ticket creation:** if an `integration_id` is set on the run, PM calls `provider.create_issue`
+  for each ticket in the spec (Plane / GitHub / Jira). The integration is selected per-run (from
+  the admin upload form or the API). Ticket IDs/URLs are stored in `PMState.ticket_refs`.
 - **Delivery sink** (code): the PR carries the *implementation* produced by the build team. Opened
   only once there is code; reviewed; merged to the base branch on approval.
-- **Phase-1 correction (open task):** the walking skeleton wrote the spec into the PR to test
-  plumbing. Next change: route the spec to the Board sink, and create the PR only for code from the
-  Coding agent. Tracked in §5 Phase 1 + Changelog.
+- **Spec input sources:** issues from a live integration (`raw_to_spec`) **or** an uploaded file
+  (`spec_file` mode — `.md`, `.txt`, `.pdf`, `.docx` accepted; converted to Markdown before the LLM).
 
 ---
 
@@ -237,8 +240,7 @@ with it, so a teammate could point the loop at a new repo at any phase boundary.
 - Define `WorkflowState` with failure/retry fields from day one.
 - Build incrementally (see scoping decision): a **walking skeleton** of the git→PR plumbing first,
   then layer in agent intelligence.
-- **Correct the flow (next):** spec → **Board sink** (file today); the **PR carries code only**
-  (§4c). The skeleton currently puts the spec in the PR — replace that once the Coding agent exists.
+- **Correct the flow (done 2026-06-12):** spec → local record + integration tickets (§4c); the **PR carries code only**. The skeleton's spec-in-PR is replaced: PM writes the local record and creates tickets; PRs carry only code from the Coding agent.
 - **Exit criteria:** one real Plane issue → spec on the board → **code** PR in the fork, reviewed/
   mergeable.
 
@@ -312,14 +314,14 @@ with it, so a teammate could point the loop at a new repo at any phase boundary.
 | 9 | **Optional RFC stage** | Some teams want a design-review RFC after the PM spec, before coding. Modeled as an optional, config-gated pipeline node (off by default). Build later (Phase 1.5). See §4b. |
 | 10 | **Git auth = HTTPS via `gh`** | Engine fetches/pushes over HTTPS using `gh auth setup-git` credentials, independent of the clone's `origin` (which may be SSH). Avoids ssh-agent dependence in headless runs. |
 | 11 | **Models (Groq via LiteLLM)** | PM=`gpt-oss-120b` (reasoning+tool calling); Dev/Fixer=`qwen3-32b` (code); Reviewer=`llama-3.3-70b-versatile`. LLM client has a **JSON-mode fallback** when a provider's tool-calling validator rejects output (e.g. small llama on Groq). |
-| 12 | **Specs → Board, code → PR** | Specs/tickets publish to a **Board sink** (file today; Jira/Plane/Trello later) for client oversight. PRs carry **implementation only**. The skeleton's spec-in-PR is a temporary plumbing artifact to be corrected. See §0/§4c. |
+| 12 | **Specs → local record + integration; code → PR** | PM always writes a local `.md`/`.json` spec record to `runtime/board/`. Tickets are created in the selected integration (Plane/GitHub/Jira via `create_issue`) when `integration_id` is set on the run. PRs carry **implementation only**. There is no configurable "board sink" parameter — the local write is a fixed side-effect. See §4c. |
 | 13 | **Product = multi-tenant agentic software house** | North star (§0): agents are "staff", humans are "clients" who set requirements/integrations/flow and keep oversight. Multi-tenant, parallel engagements. SaaS packaging is Phase 5+; it must not alter the agent loop. |
 | 14 | **~~Control plane = Django~~ (SUPERSEDED by #15)** | *Original:* a Django control plane (`apps/house`) persisted Client→Project→Run with an admin UI + `manage.py build`. **Removed 2026-06-11** when we adopted the boilerplate-spec stack: FastAPI replaces Django and the LangGraph Postgres checkpointer is the run state of record. Multi-tenant Client/Project tables can return later as FastAPI/SQLAlchemy app tables if needed (not the checkpointer's job). |
 | 15 | **Web framework = FastAPI; orchestration = LangGraph; run state = Postgres checkpointer** | The entrypoint is an async **FastAPI** app (`POST /runs` → `run_id`, background task; `GET /runs/{id}` reads checkpointer state). The pipeline is a **LangGraph** `StateGraph` (PM→Research→Coding→Reviewer→Fixer→Merge) over one **namespaced** `WorkflowState`, persisted by the **AsyncPostgresSaver** keyed on `thread_id`=`run_id`. Replaces the hand-rolled sync `pipeline.py`. |
 | 16 | **Engine is async; LLM via LangChain** | All agent/graph/client code is `async`; blocking git/subprocess calls run in `asyncio.to_thread`. The provider-agnostic LLM is a **LangChain** chat model (`ChatAnthropic`/`ChatOpenAI`, `base_url` for LiteLLM/Ollama/vLLM); agents force structure via `.with_structured_output(schema)`. Replaces the hand-rolled `LLMClient`. |
 | 17 | **Layout = `src/` single package; config = hybrid** | Best-practice `src/ash/` single package (`api/`, `agents/`, `graph/`, `clients/`, `toolkits/`, `llm/`, `config/`). Tools are 3-layered: `clients/` → `toolkits/` (`BaseTool`) → agents. Config is **hybrid**: `pydantic-settings` `Settings` for engine secrets + per-agent model overrides, **plus** `projects/<name>.yaml` for the multi-tenant per-engagement layer (design rule #1 preserved). |
 | 18 | **Agent roster kept; Reviewer/Fixer stubbed; quality gates hardened** | We keep ASH's PM/Research/Coding (real) and add Reviewer/Fixer as `BaseAgent` stubs (Phases 2–3). With no local clone, Research/Coding skip gracefully so a PM-only run completes. **mypy --strict** is enforced in CI (ruff → mypy → pytest); Python ≥3.12. Posting the spec back as an issue comment is deferred (the `post_comment` seam exists). |
-| 19 | **Pluggable issue-source integrations + per-run intake routing + admin/UI** | Issue sources (GitHub / Jira / Plane) are DB-backed `Integration` rows behind one `IssueProvider` interface; secrets **encrypted at rest** (Fernet). A per-run **intake_mode** (`raw_to_spec` / `spec_ready` / `raw_to_dev`) drives a LangGraph **conditional edge** that uses or skips PM. App DB = **SQLAlchemy 2.0 async** (same Postgres); admin = **SQLAdmin** at `/admin` (env-credentialed); FE = **Jinja2** UI at `/`. New sources = new provider, no graph/agent changes. |
+| 19 | **Pluggable issue-source integrations + per-run intake routing + admin/UI** | Issue sources (GitHub / Jira / Plane) are DB-backed `Integration` rows behind one `IssueProvider` interface; secrets **encrypted at rest** (Fernet). A per-run **intake_mode** (`raw_to_spec` / `spec_ready` / `raw_to_dev` / `spec_file`) drives a LangGraph **conditional edge** that uses or skips PM. `spec_file` mode accepts `.md`/`.txt`/`.pdf`/`.docx` uploads via a SQLAdmin `BaseView`; files are converted to Markdown before the LLM call (`utils/file_extract`). `IssueProvider` gains `create_issue(title, body)` — PM calls it per-ticket when `integration_id` is set. App DB = **SQLAlchemy 2.0 async** (same Postgres); admin = **SQLAdmin** at `/admin` (env-credentialed); FE = **Jinja2** UI at `/`. New sources = new provider, no graph/agent changes. |
 
 ### 7a. Repo topology — configurable per project
 
@@ -376,11 +378,11 @@ A validated assumption to design for now and build later: **the loop should not 
 ```
    TRIGGERS (inputs)                 ENGINE                    SINKS (outputs)
    ─────────────────                ────────                  ───────────────
-   GitHub issues   (now) ─┐                          ┌─► JSON spec file        (now)
-   CI failures            ├─► triage ─► PM ─► Dev ─►──┤─► Jira / Plane / Trello (later)
-   Project boards         │   ...      Reviewer Fixer │   your own Plane board
-   Webhooks / Slack       │                           └─► GitHub PR on the fork (Phase 1)
-   UI submission   (later)┘
+   GitHub issues   (now) ─┐                          ┌─► local .md/.json spec  (always)
+   Jira / Plane    (now)  ├─► triage ─► PM ─► Dev ─►──┤─► Plane/GitHub/Jira tickets (now, per-run)
+   Spec file upload (now) │   ...      Reviewer Fixer │
+   CI failures     (later)│                           └─► GitHub PR on the fork (Phase 1)
+   Webhooks / Slack (later)┘
    Manual / cron
 ```
 
@@ -388,11 +390,11 @@ A validated assumption to design for now and build later: **the loop should not 
   failures, boards, webhooks, Slack, cron, **or a UI where a user submits/initiates work** and
   picks the source. Selected via `projects/<name>.yaml`.
 - **Sinks come in two kinds (§4c):**
-  - **Board sink** (specs/tickets) — a `publish_spec(spec)` interface. Local `.md`/`.json` today;
-    **Jira / Plane / Trello** (or a client's own Plane board) later. This is where the client sees
-    and approves planned work.
+  - **Spec/ticket sink** — local `.md`/`.json` record always written to `runtime/board/`; tickets
+    additionally created in the selected integration (Plane/GitHub/Jira) via `create_issue` when
+    `integration_id` is set. This is where the client sees and approves planned work.
   - **Delivery sink** (code) — the **PR** produced by the build team → review → merge to base.
-  - Multiple sinks can be active at once; both are selected per client/project in config.
+  - Multiple sinks can be active at once; the integration is selected per-run.
 - **Integrations:** these are MCP-style connectors. Auth/config lives in project config; the engine
   core stays connector-agnostic.
 - **UI:** a later, separate layer (Phase 5+) outside the engine. It reads `state.md`/specs and lets
@@ -511,6 +513,15 @@ Don't remove a gate until the thing under it has earned it.
 ## 11. Changelog
 
 Per the working agreement (top of doc), every decision/implementation change is logged here.
+
+- **2026-06-12 — Spec file upload + multi-format extraction + ticket creation + logging (decisions #12/#19 updated).**
+  - **`spec_file` intake mode:** new `IntakeMode` literal; intake skips issue fetch; PM converts the uploaded file → `Spec` via LLM. File stored as absolute path at `runtime/uploads/<uuid>.<ext>`. No project required for spec-file runs — `project`, `item_id` both optional throughout.
+  - **Multi-format extraction (`utils/file_extract`):** `.md`/`.txt` passthrough; `.pdf` via `pypdf`; `.docx` via `python-docx` (headings → `#`, bold/italic preserved, lists → `-`). All normalized to Markdown before the LLM call to reduce token count.
+  - **Ticket creation via integration:** `IssueProvider` protocol gains `create_issue(title, body) -> str`; implemented in GitHub, Plane, and Jira providers. PM calls it for each `Ticket` in the generated `Spec` when `integration_id` is set. `PMState.ticket_refs` replaces `PMState.board_ref`.
+  - **Admin upload view (`SpecUploadView`):** SQLAdmin `BaseView` at `/admin/spec-upload`; sidebar icon; form has file input + "Create tickets in" integration dropdown. Runner accessed via `request.app.state.outer_app.state.runner` (inner/outer app fix). Redirect target: `run-record` (SQLAdmin identity derived from model class name, not display name).
+  - **Board sink removed as a parameter:** local `.md`/`.json` write to `RUNTIME_DIR/board/` is a fixed side-effect, no longer a configurable `board_sink` field on state/API/runner. §4c and §8 updated accordingly.
+  - **Structured logging (`utils/logging`):** `configure_logging(level)` wired in lifespan; agent entry/exit/duration/errors logged from the node wrapper; run start/end from runner; ticket creation counts from PM; LLM calls at DEBUG. Third-party noise (`httpx`, `sqlalchemy.engine`, `langchain`) silenced at WARNING.
+  - Verified: ruff clean, mypy --strict clean (60 files), 65 pytest tests green.
 
 - **2026-06-11 — Fix: board specs invisible on host (docker-compose runtime volume).** A named
   volume `ash-runtime:/app/runtime` shadowed the project bind mount, so PM board files

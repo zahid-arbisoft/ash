@@ -71,6 +71,12 @@ class GitHubIssueProvider:
         )
         return str(resp.json()["html_url"])
 
+    async def create_issue(self, title: str, body: str) -> str:
+        resp = await self._request(
+            "POST", f"/repos/{self._repo}/issues", json={"title": title, "body": body}
+        )
+        return str(resp.json()["html_url"])
+
     def _to_issue(self, data: dict[str, Any]) -> RawIssue:
         labels = [str(lbl["name"]) for lbl in (data.get("labels") or []) if isinstance(lbl, dict)]
         return RawIssue(

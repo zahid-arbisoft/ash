@@ -18,12 +18,12 @@ from pydantic import BaseModel, Field
 from ash.integrations.base import RawIssue
 from ash.schemas import CodeChange, ImplementationPlan, Spec
 
-IntakeMode = Literal["spec_ready", "raw_to_spec", "raw_to_dev"]
+IntakeMode = Literal["spec_ready", "raw_to_spec", "raw_to_dev", "spec_file"]
 
 
 class PMState(BaseModel):
     spec: Spec | None = None
-    board_ref: str | None = None
+    ticket_refs: list[str] = Field(default_factory=list)
     comment_url: str | None = None  # set when the deferred post-comment feature lands
     note: str | None = None
     error: str | None = None
@@ -62,13 +62,14 @@ class IntakeState(BaseModel):
 
 class WorkflowState(BaseModel):
     run_id: str
-    project: str
-    item_id: str
+    project: str = ""
+    item_id: str = ""
     board: str = "github"
 
     # intake configuration (set at run start)
     intake_mode: IntakeMode = "raw_to_spec"
     integration_id: int | None = None
+    spec_file_path: str | None = None
 
     # discovered during the run
     raw_issue: RawIssue | None = None

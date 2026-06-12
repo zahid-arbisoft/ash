@@ -2,14 +2,19 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from fastapi import FastAPI
 from sqladmin import Admin
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 import ash.admin._compat  # noqa: F401 — applies the sqladmin/wtforms boolean-widget shim on import
 from ash.admin.auth import AdminAuth
+from ash.admin.spec_upload import SpecUploadView
 from ash.admin.views import AdminUserAdmin, IntegrationAdmin, RunRecordAdmin
 from ash.config.settings import Settings
+
+_TEMPLATES_DIR = str(Path(__file__).parent / "templates")
 
 
 def setup_admin(app: FastAPI, engine: AsyncEngine, settings: Settings) -> Admin:
@@ -18,8 +23,17 @@ def setup_admin(app: FastAPI, engine: AsyncEngine, settings: Settings) -> Admin:
         username=settings.admin_user,
         password=settings.admin_password,
     )
-    admin = Admin(app, engine, authentication_backend=auth, title="ASH Admin")
+    admin = Admin(
+        app,
+        engine,
+        authentication_backend=auth,
+        title="ASH Admin",
+        templates_dir=_TEMPLATES_DIR,
+    )
     admin.add_view(IntegrationAdmin)
     admin.add_view(RunRecordAdmin)
     admin.add_view(AdminUserAdmin)
+    admin.add_base_view(SpecUploadView)
+    # give BaseViews a path back to the outer FastAPI app (runner lives there)
+    admin.admin.state.outer_app = app
     return admin

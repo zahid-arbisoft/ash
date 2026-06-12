@@ -69,6 +69,25 @@ class JiraIssueProvider:
         )
         return [self._to_issue(d) for d in resp.json().get("issues", [])][:limit]
 
+    async def create_issue(self, title: str, body: str) -> str:
+        payload: dict[str, Any] = {
+            "fields": {
+                "project": {"key": self._project_key},
+                "summary": title,
+                "description": {
+                    "type": "doc",
+                    "version": 1,
+                    "content": [
+                        {"type": "paragraph", "content": [{"type": "text", "text": body}]}
+                    ],
+                },
+                "issuetype": {"name": "Story"},
+            }
+        }
+        resp = await self._request("POST", "/rest/api/3/issue", json=payload)
+        key = str(resp.json().get("key", ""))
+        return f"{self._api}/browse/{key}" if key else ""
+
     async def post_comment(self, item_id: str, body: str) -> str:
         payload = {
             "body": {

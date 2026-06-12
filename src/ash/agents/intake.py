@@ -26,6 +26,8 @@ class IntakeAgent(BaseAgent):
         self._provider = provider
 
     async def run(self, state: WorkflowState) -> dict[str, Any]:
+        if state.intake_mode == "spec_file":
+            return {"intake": {"note": "spec_file mode — no issue fetch"}}
         provider = self._provider or await self._resolve(state)
         raw = await provider.fetch_issue(state.item_id)
         update: dict[str, Any] = {

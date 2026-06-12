@@ -34,13 +34,85 @@ class FakeModel:
         return _Structured(self._result)
 
 
-async def test_pm_generates_spec_from_raw_issue_and_publishes_board(monkeypatch):
+async def test_pm_reads_markdown_spec_file_and_converts(monkeypatch, tmp_path):
     spec = _spec()
-    published = {}
 
     class FakeBoard:
         def publish_spec(self, item_id, url, s):
-            published.update(item_id=item_id, url=url, spec=s)
+            return "board-ref-2"
+
+    monkeypatch.setattr("ash.agents.pm.get_board", lambda _dir: FakeBoard())
+
+    spec_file = tmp_path / "test.md"
+    spec_file.write_text("# My Spec\n\nThis is a spec.\n")
+
+    agent = PMAgent(Settings(), model=FakeModel(spec))
+    state = WorkflowState(
+        run_id="r2",
+        project="",
+        item_id="",
+        intake_mode="spec_file",
+        spec_file_path=str(spec_file),
+    )
+
+    update = await agent.run(state)
+
+    assert update["pm"]["spec"] is spec
+    assert update["pm"]["ticket_refs"] == []
+
+
+async def test_pm_creates_tickets_via_integration_when_integration_id_set(
+    monkeypatch, tmp_path
+):
+    from ash.schemas import Ticket, TicketType
+
+    ticket = Ticket(
+        id="T1", title="Do work", description="Do the work", type=TicketType.feature
+    )
+    spec = _spec()
+    spec.tickets = [ticket]
+
+    created: list[tuple[str, str]] = []
+
+    class FakeBoard:
+        def publish_spec(self, item_id, url, s):
+            return "board-ref"
+
+    class FakeProvider:
+        async def create_issue(self, title: str, body: str) -> str:
+            created.append((title, body))
+            return f"https://tracker/issues/{len(created)}"
+
+    async def fake_provider_for(_id: int) -> FakeProvider:
+        return FakeProvider()
+
+    monkeypatch.setattr("ash.agents.pm.get_board", lambda _dir: FakeBoard())
+    monkeypatch.setattr("ash.agents.pm.provider_for", fake_provider_for)
+
+    spec_file = tmp_path / "test.md"
+    spec_file.write_text("# Spec\n")
+
+    agent = PMAgent(Settings(), model=FakeModel(spec))
+    state = WorkflowState(
+        run_id="r3",
+        project="",
+        item_id="",
+        intake_mode="spec_file",
+        spec_file_path=str(spec_file),
+        integration_id=1,
+    )
+
+    update = await agent.run(state)
+
+    assert update["pm"]["ticket_refs"] == ["https://tracker/issues/1"]
+    assert created[0][0] == "Do work"
+
+
+async def test_pm_generates_spec_from_raw_issue(monkeypatch):
+    spec = _spec()
+
+    class FakeBoard:
+        def publish_spec(self, item_id, url, s):
             return "board-ref-1"
 
     monkeypatch.setattr("ash.agents.pm.get_board", lambda _dir: FakeBoard())
@@ -52,5 +124,4 @@ async def test_pm_generates_spec_from_raw_issue_and_publishes_board(monkeypatch)
     update = await agent.run(state)
 
     assert update["pm"]["spec"] is spec
-    assert update["pm"]["board_ref"] == "board-ref-1"
-    assert published["item_id"] == "42"
+    assert update["pm"]["ticket_refs"] == []

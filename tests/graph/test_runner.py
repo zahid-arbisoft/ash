@@ -24,7 +24,7 @@ class SpecPM:
             technical_spec=TechnicalSpec(approach="a", testing_strategy="t"),
             tickets=[],
         )
-        return {"pm": {"spec": spec, "board_ref": "r"}}
+        return {"pm": {"spec": spec, "ticket_refs": []}}
 
 
 def _runner():
@@ -39,6 +39,27 @@ async def test_start_run_and_get_run():
     assert status is not None
     assert status["status"] == "completed"
     assert status["item_id"] == "42"
+
+
+async def test_start_run_with_no_item_id():
+    runner = _runner()
+    run_id = await runner.start_run(project="plane", wait=True)
+    status = await runner.get_run(run_id)
+    assert status is not None
+    assert status["item_id"] == ""
+
+
+async def test_start_run_with_spec_file_path():
+    runner = _runner()
+    run_id = await runner.start_run(
+        project="plane",
+        intake_mode="spec_file",
+        spec_file_path="plane/specs/test.md",
+        wait=True,
+    )
+    status = await runner.get_run(run_id)
+    assert status is not None
+    assert status["spec_file_path"] == "plane/specs/test.md"
 
 
 async def test_get_run_unknown_returns_none():

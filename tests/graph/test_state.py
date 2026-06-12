@@ -12,5 +12,15 @@ def test_default_substates_present():
 
 def test_substates_are_isolated():
     state = WorkflowState(run_id="r1", project="plane", item_id="42")
-    state.pm.board_ref = "ref"
+    state.pm.ticket_refs = ["ref"]
     assert state.research.plan is None  # writing pm must not touch research
+
+
+def test_spec_file_path_defaults_none():
+    state = WorkflowState(run_id="r1", project="plane", item_id="")
+    assert state.spec_file_path is None
+
+
+def test_item_id_defaults_empty():
+    state = WorkflowState(run_id="r1", project="plane")
+    assert state.item_id == ""

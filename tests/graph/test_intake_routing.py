@@ -80,6 +80,13 @@ async def test_raw_to_dev_skips_pm():
     assert out["pm"]["spec"] is None
 
 
+async def test_spec_file_runs_pm():
+    """spec_file mode must route through PM (for MD→Spec conversion)."""
+    out = await _run(_build(""), "spec_file", "", "t4")
+    assert out["pm"]["note"] == "pm-ran"
+    assert out["status"] == "completed"
+
+
 async def test_spec_ready_parses_spec_and_skips_pm():
     out = await _run(_build(_spec().model_dump_json()), "spec_ready", "", "t3")
     assert out["pm"]["spec"] is not None  # parsed at intake

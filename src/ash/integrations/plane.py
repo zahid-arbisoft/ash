@@ -68,6 +68,12 @@ class PlaneIssueProvider:
         )
         return str(resp.json().get("id", item_id))
 
+    async def create_issue(self, title: str, body: str) -> str:
+        resp = await self._request(
+            "POST", f"{self._base()}/", json={"name": title, "description_stripped": body}
+        )
+        return str(resp.json().get("id", ""))
+
     def _to_issue(self, data: dict[str, Any]) -> RawIssue:
         iid = str(data.get("id") or "")
         body = str(data.get("description_stripped") or data.get("description_html") or "")

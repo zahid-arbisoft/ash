@@ -89,3 +89,48 @@ async def test_plane_provider_fetch():
     assert issue.title == "Title"
     assert issue.body == "body text"
     assert issue.source == "plane"
+
+
+async def test_github_create_issue():
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "POST"
+        assert "/repos/o/r/issues" in str(request.url)
+        return httpx.Response(201, json={"html_url": "https://github.com/o/r/issues/7"})
+
+    async with _client(handler) as http:
+        p = GitHubIssueProvider(token="tok", config={"repo": "o/r"}, http=http)
+        ref = await p.create_issue("New feature", "Do the thing")
+    assert ref == "https://github.com/o/r/issues/7"
+
+
+async def test_plane_create_issue():
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "POST"
+        return httpx.Response(201, json={"id": "new-id"})
+
+    async with _client(handler) as http:
+        p = PlaneIssueProvider(
+            token="k",
+            config={"workspace_slug": "w", "project_id": "p"},
+            base_url="https://plane.example",
+            http=http,
+        )
+        ref = await p.create_issue("My ticket", "Description here")
+    assert ref == "new-id"
+
+
+async def test_jira_create_issue():
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "POST"
+        assert "/rest/api/3/issue" in str(request.url)
+        return httpx.Response(201, json={"key": "ENG-5"})
+
+    async with _client(handler) as http:
+        p = JiraIssueProvider(
+            token="t",
+            config={"email": "e@x.com", "project_key": "ENG"},
+            base_url="https://x.atlassian.net",
+            http=http,
+        )
+        ref = await p.create_issue("Story title", "Story body")
+    assert ref == "https://x.atlassian.net/browse/ENG-5"

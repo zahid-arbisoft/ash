@@ -1,0 +1,36 @@
+{% extends "sqladmin/layout.html" %}
+{% block content %}
+<div class="col-12">
+  <div class="card">
+    <div class="card-header">
+      <h3 class="card-title">Start Run from Spec File</h3>
+    </div>
+    <div class="card-body border-bottom py-3">
+      {% if error %}
+      <div class="alert alert-danger" role="alert">{{ error }}</div>
+      {% endif %}
+      <form method="post" enctype="multipart/form-data">
+        <div class="mb-3">
+          <label class="form-label">Spec file (.md)</label>
+          <input type="file" name="spec_file" accept=".md,.txt,.pdf,.docx" class="form-control" required>
+          <small class="form-hint">Supported formats: .md, .txt, .pdf, .docx — converted to Markdown before processing.</small>
+        </div>
+        <div class="mb-3">
+          <label class="form-label">Create tickets in</label>
+          <select name="integration_id" class="form-select">
+            <option value="">None (file only)</option>
+            {% for integ in integrations %}
+            {% if integ.enabled %}
+            <option value="{{ integ.id }}">{{ integ.name }} ({{ integ.kind.value }})</option>
+            {% endif %}
+            {% endfor %}
+          </select>
+          <small class="form-hint">If selected, each ticket from the spec will be created as an issue in this integration.</small>
+        </div>
+        <button type="submit" class="btn btn-primary">Upload &amp; Start Run</button>
+        <a href="{{ request.url_for('admin:index') }}" class="btn ms-2">Cancel</a>
+      </form>
+    </div>
+  </div>
+</div>
+{% endblock %}

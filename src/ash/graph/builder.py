@@ -36,8 +36,10 @@ async def _merge(state: WorkflowState) -> dict[str, Any]:
 
 
 def _route_after_intake(state: WorkflowState) -> str:
-    """raw_to_spec runs PM; spec_ready/raw_to_dev skip straight to the build team."""
-    return "pm" if state.intake_mode == "raw_to_spec" else "research"
+    """raw_to_spec and spec_file run PM; spec_ready/raw_to_dev skip straight to build team."""
+    if state.intake_mode in ("raw_to_spec", "spec_file"):
+        return "pm"
+    return "research"
 
 
 def build_graph(agents: dict[str, Agent], *, checkpointer: Any) -> Any:
