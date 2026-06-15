@@ -10,7 +10,9 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import (
+    AsyncConnection,
     AsyncEngine,
     AsyncSession,
     async_sessionmaker,
@@ -54,12 +56,39 @@ def get_sessionmaker() -> async_sessionmaker[AsyncSession]:
     return _sessionmaker
 
 
+# Lightweight, idempotent column backfills for tables that predate a schema change. This is a
+# stopgap until Alembic: `create_all` creates *missing tables* but never ALTERs existing ones, so a
+# DB created before a column was added would 500 on the new SELECT. Postgres-only (the app DB);
+# `ADD COLUMN IF NOT EXISTS` makes each statement safe to run on every startup.
+_PG_COLUMN_BACKFILLS: tuple[str, ...] = (
+    "ALTER TABLE run_records ADD COLUMN IF NOT EXISTS task_sink_id INTEGER",
+    "ALTER TABLE run_records ADD COLUMN IF NOT EXISTS status VARCHAR(40) "
+    "NOT NULL DEFAULT 'running'",
+    "ALTER TABLE run_records ADD COLUMN IF NOT EXISTS ticket_id VARCHAR(120) "
+    "NOT NULL DEFAULT ''",
+    "ALTER TABLE run_records ADD COLUMN IF NOT EXISTS story_mode VARCHAR(20) "
+    "NOT NULL DEFAULT 'single'",
+    # decision #26: per-story task scoping (agent_tasks predates the ticket_id column).
+    "ALTER TABLE agent_tasks ADD COLUMN IF NOT EXISTS ticket_id VARCHAR(120) "
+    "NOT NULL DEFAULT ''",
+    # story_records / agent_run_metrics are created fresh by create_all; no backfills needed.
+)
+
+
+async def _backfill_columns(conn: AsyncConnection) -> None:
+    if conn.dialect.name != "postgresql":
+        return  # only the Postgres app DB needs these; sqlite test DBs are built fresh
+    for stmt in _PG_COLUMN_BACKFILLS:
+        await conn.execute(text(stmt))
+
+
 async def init_db() -> None:
-    """Create app tables if they don't exist (import models first so they register)."""
+    """Create app tables if they don't exist, then backfill new columns on pre-existing tables."""
     import ash.db.models  # noqa: F401 — register tables on Base.metadata
 
     async with get_engine().begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        await _backfill_columns(conn)
 
 
 async def get_session() -> AsyncIterator[AsyncSession]:

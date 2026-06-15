@@ -22,7 +22,10 @@ class PMPublishStub:
 
 
 def _agents():
-    agents = {n: StubAgent(n) for n in ("intake", "pm", "research", "coding", "reviewer", "fixer")}
+    agents = {
+        n: StubAgent(n)
+        for n in ("intake", "pm", "rfc", "research", "coding", "reviewer", "fixer")
+    }
     agents["pm_publish"] = PMPublishStub()
     return agents
 
@@ -36,7 +39,10 @@ async def test_graph_traverses_all_nodes_and_completes():
     initial = WorkflowState(run_id="r1", project="plane", item_id="42")
     result = _as_dict(await graph.ainvoke(initial, config={"configurable": {"thread_id": "r1"}}))
     assert result["issue_title"] == "pm ran"
-    assert result["fixer"]["note"] == "fixer ran"
+    # No spec → one synthetic story; the build team runs scoped to it.
+    story = result["stories"]["_main"]
+    assert story.fixer.note == "fixer ran"
+    assert story.status == "completed"
     assert result["status"] == "completed"
 
 

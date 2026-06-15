@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}PM runs{% endblock %}
+{% block breadcrumb %}PM runs{% endblock %}
+{% block body %}
+
+<div class="flex items-center justify-between mb-5">
+  <div>
+    <h1 class="text-xl font-semibold">PM runs</h1>
+    <p class="text-sm text-muted mt-0.5">Every spec the PM agent has generated — searchable.</p>
+  </div>
+  <a href="/ui/runs/new"
+     class="bg-accent text-bg font-semibold text-sm rounded-lg px-4 h-9 inline-flex items-center hover:brightness-110">
+    New run
+  </a>
+</div>
+
+<div class="flex flex-wrap gap-2 mb-4">
+  <label class="flex items-center bg-surface border border-border rounded-lg px-3 h-9 flex-1 min-w-[200px]">
+    <span class="text-muted mr-2">⌕</span>
+    <input type="search" name="q" value="{{ q }}" placeholder="Search epic title, summary, item…"
+           class="!bg-transparent !border-0 !p-0 outline-none text-sm w-full placeholder:text-muted/60"
+           hx-get="/ui/pm-runs"
+           hx-trigger="input changed delay:300ms, search"
+           hx-target="#pm-results" hx-swap="innerHTML"
+           hx-include="[name=project]">
+  </label>
+  <select name="project" class="!w-auto bg-surface border border-border rounded-lg px-3 h-9 text-sm"
+          hx-get="/ui/pm-runs" hx-target="#pm-results" hx-swap="innerHTML" hx-include="[name=q]">
+    <option value="">All projects</option>
+    {% for p in projects %}<option value="{{ p }}" {{ "selected" if p == filter_project }}>{{ p }}</option>{% endfor %}
+  </select>
+</div>
+
+<div class="bg-surface border border-border rounded-xl overflow-hidden">
+  <div id="pm-results">
+    {% include "_pm_runs_results.html" %}
+  </div>
+</div>
+
+{% endblock %}

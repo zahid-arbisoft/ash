@@ -1,235 +1,356 @@
 {% extends "base.html" %}
 {% block title %}Connectors{% endblock %}
+{% block breadcrumb %}Connectors{% endblock %}
 {% block body %}
-<style>
-  .guide-tabs { display:flex; gap:.5rem; margin:.75rem 0; flex-wrap:wrap; }
-  .guide-tab { background:var(--bg); border:1px solid var(--border); border-radius:6px;
-               padding:.35rem .85rem; cursor:pointer; font-size:.84rem; color:var(--muted);
-               transition:border-color .12s, color .12s; }
-  .guide-tab:hover { border-color:var(--accent); color:var(--fg); }
-  .guide-tab.active { background:var(--accent); color:#0b0d10; border-color:var(--accent); font-weight:600; }
-  .guide-panel { display:none; } .guide-panel.active { display:block; }
 
-  .config-block { position:relative; background:#0b0d10; border:1px solid var(--border);
-                  border-radius:6px; padding:.75rem 1rem; font-family:monospace; font-size:.84rem;
-                  white-space:pre; overflow-x:auto; margin:.5rem 0 1rem; }
-  .copy-btn { position:absolute; top:.45rem; right:.5rem; background:var(--card);
-              border:1px solid var(--border); border-radius:4px; padding:.15rem .5rem;
-              font-size:.74rem; cursor:pointer; color:var(--muted); }
-  .copy-btn:hover { color:var(--fg); border-color:var(--accent); }
-  .copy-btn.copied { color:#4ade80; border-color:#4ade80; }
+{# ── Add-connector wizard modal (Alpine.js, C1) ─────────────────────────── #}
+<div x-data="{
+  open: {{ 'true' if wizard_error else 'false' }},
+  step: 1,
+  kind: '',
+  testing: false,
+  healthResult: null,
+  async testConn() {
+    this.testing = true; this.healthResult = null;
+    const fd = new FormData(document.getElementById('wizard-form'));
+    const res = await fetch('/ui/connectors/preview-health', {method:'POST', body: fd});
+    this.healthResult = await res.json();
+    this.testing = false;
+  }
+}">
 
-  .field-ref { width:100%; border-collapse:collapse; font-size:.84rem; margin:.5rem 0; }
-  .field-ref th { color:var(--muted); padding:.4rem .6rem; font-weight:600; border-bottom:1px solid var(--border); }
-  .field-ref td { padding:.4rem .6rem; border-bottom:1px solid #1c2030; vertical-align:top; }
-  .field-ref td:first-child { font-family:monospace; color:var(--fg); width:160px; }
-  .badge-req { background:#1a3520; color:#4ade80; border-radius:4px; padding:.1rem .4rem; font-size:.72rem; }
-  .badge-opt { background:#1a1f2e; color:var(--muted); border-radius:4px; padding:.1rem .4rem; font-size:.72rem; }
+{# trigger button #}
+<div class="flex items-center justify-between mb-5">
+  <div>
+    <h1 class="text-xl font-semibold">Connectors</h1>
+    <p class="text-sm text-muted mt-0.5">Sources &amp; sinks — via hosted MCP servers or the built-in clients.</p>
+  </div>
+  <button @click="open=true; step=1"
+          class="bg-accent text-bg font-semibold text-sm rounded-lg px-4 h-9 inline-flex items-center hover:brightness-110">
+    + Add connector
+  </button>
+</div>
 
-  .hint-row { display:grid; grid-template-columns:1fr 1fr; gap:1rem; margin:.75rem 0; }
-  .hint-box { background:#0f1218; border:1px solid var(--border); border-radius:6px; padding:.65rem .9rem; font-size:.83rem; line-height:1.65; }
-  .hint-box strong { color:var(--fg); display:block; margin-bottom:.25rem; font-size:.8rem; text-transform:uppercase; letter-spacing:.04em; }
-  .hint-box code { background:#0b0d10; padding:.1rem .3rem; border-radius:4px; font-size:.8rem; color:#86efac; }
-  .multi-note { background:#0d1c10; border:1px solid #1a4a20; border-radius:6px;
-                padding:.6rem .9rem; font-size:.83rem; line-height:1.6; margin-top:.75rem; }
-  @media(max-width:600px) { .hint-row { grid-template-columns:1fr; } }
-</style>
+{# modal backdrop #}
+<div x-show="open" x-transition.opacity class="fixed inset-0 bg-bg/80 z-40" @click="open=false"></div>
 
-<h1>Connectors</h1>
-<p class="muted">One list of external systems (GitHub / Jira / Plane / …). A connector can be an
-  issue <strong>source</strong>, a ticket <strong>sink</strong>, or both. Manage them in the
-  <a href="/admin" target="_blank">Admin portal</a> — secrets are encrypted at rest.</p>
+{# modal panel #}
+<div x-show="open" x-transition class="fixed inset-0 flex items-center justify-center z-50 p-4">
+  <div class="bg-surface border border-border rounded-2xl shadow-2xl w-full max-w-lg" @click.stop>
 
-<div class="card">
-  {% if connectors %}
-    <table>
-      <tr><th>Name</th><th>Kind</th><th>Access</th><th>Source</th><th>Sink</th><th>Base URL</th><th>Enabled</th></tr>
-      {% for c in connectors %}
-        <tr>
-          <td>{{ c.name }}</td>
-          <td><span class="pill">{{ c.kind.value }}</span></td>
-          <td><span class="pill">{{ "MCP" if c.transport == "http" else "builtin" }}</span></td>
-          <td>{{ "✓" if c.is_source else "—" }}</td>
-          <td>{{ "✓ (default)" if c.is_default_sink else ("✓" if c.is_sink else "—") }}</td>
-          <td class="muted">{{ c.base_url or "—" }}</td>
-          <td>{{ "✓" if c.enabled else "—" }}</td>
-        </tr>
+    <div class="flex items-center justify-between px-6 pt-5 pb-4 border-b border-border/60">
+      <h2 class="font-semibold text-fg">New connector</h2>
+      <button @click="open=false" class="text-muted hover:text-fg text-lg leading-none">✕</button>
+    </div>
+
+    {# step pills #}
+    <div class="flex gap-1 px-6 pt-4">
+      <template x-for="(label, i) in ['Kind','Config','Test','Save']" :key="i">
+        <div class="flex items-center gap-1">
+          <span class="w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold"
+                :class="step > i+1 ? 'bg-ok text-bg' : step === i+1 ? 'bg-accent text-bg' : 'bg-border text-muted'"
+                x-text="step > i+1 ? '✓' : i+1"></span>
+          <span class="text-xs" :class="step === i+1 ? 'text-fg' : 'text-muted'" x-text="label"></span>
+          <span x-show="i < 3" class="text-border text-xs">›</span>
+        </div>
+      </template>
+    </div>
+
+    {% if wizard_error %}
+    <div class="mx-6 mt-3 px-3 py-2 rounded-lg bg-danger/10 text-danger text-sm">{{ wizard_error }}</div>
+    {% endif %}
+
+    <form id="wizard-form" method="post" action="/ui/connectors" class="px-6 pb-6 mt-4 space-y-4">
+
+      {# Step 1: Kind #}
+      <div x-show="step === 1" class="space-y-3">
+        <p class="text-sm text-muted">What system does this connector talk to?</p>
+        <div class="grid grid-cols-2 gap-2">
+          {% for k, label, desc in [
+            ("github",  "GitHub",      "Issues, PRs, code"),
+            ("jira",    "Jira",        "Issues & boards"),
+            ("plane",   "Plane",       "Issues & cycles"),
+            ("file",    "File board",  "Local JSON board"),
+          ] %}
+          <label class="flex items-start gap-2 p-3 border rounded-xl cursor-pointer"
+                 :class="kind==='{{ k }}' ? 'border-accent bg-accent/5' : 'border-border hover:border-accent/40'">
+            <input type="radio" name="kind" value="{{ k }}" x-model="kind" class="mt-0.5 accent-accent">
+            <span>
+              <span class="block text-sm font-medium text-fg">{{ label }}</span>
+              <span class="block text-xs text-muted">{{ desc }}</span>
+            </span>
+          </label>
+          {% endfor %}
+        </div>
+        <div class="flex justify-end pt-1">
+          <button type="button" @click="if(kind) step=2"
+                  :disabled="!kind"
+                  class="px-4 h-9 rounded-lg bg-accent text-bg text-sm font-semibold disabled:opacity-40 hover:brightness-110">
+            Continue →
+          </button>
+        </div>
+      </div>
+
+      {# Step 2: Config #}
+      <div x-show="step === 2" class="space-y-3">
+        <div>
+          <label class="block text-xs text-muted mb-1">Display name <span class="text-danger">*</span></label>
+          <input name="name" required placeholder="e.g. acme-github"
+                 class="w-full bg-elevate border border-border rounded-lg px-3 h-9 text-sm text-fg placeholder-muted/60 focus:outline-none focus:border-accent">
+        </div>
+
+        {# GitHub fields #}
+        <template x-if="kind === 'github'">
+          <div class="space-y-3">
+            <div>
+              <label class="block text-xs text-muted mb-1">Repository (owner/repo) <span class="text-danger">*</span></label>
+              <input name="_gh_repo" placeholder="acme/backend"
+                     class="w-full bg-elevate border border-border rounded-lg px-3 h-9 text-sm text-fg placeholder-muted/60 focus:outline-none focus:border-accent"
+                     @input="document.querySelector('[name=config_json]').value = JSON.stringify({repo: $event.target.value})">
+            </div>
+            <div>
+              <label class="block text-xs text-muted mb-1">Token (PAT)</label>
+              <input type="password" name="secret" placeholder="ghp_…"
+                     class="w-full bg-elevate border border-border rounded-lg px-3 h-9 text-sm text-fg placeholder-muted/60 focus:outline-none focus:border-accent">
+            </div>
+          </div>
+        </template>
+
+        {# Jira fields #}
+        <template x-if="kind === 'jira'">
+          <div class="space-y-3">
+            <div class="grid grid-cols-2 gap-2">
+              <div>
+                <label class="block text-xs text-muted mb-1">Project key</label>
+                <input name="_jira_key" placeholder="ENG"
+                       class="w-full bg-elevate border border-border rounded-lg px-3 h-9 text-sm text-fg placeholder-muted/60 focus:outline-none focus:border-accent">
+              </div>
+              <div>
+                <label class="block text-xs text-muted mb-1">Workspace slug</label>
+                <input name="_jira_ws" placeholder="acme"
+                       class="w-full bg-elevate border border-border rounded-lg px-3 h-9 text-sm text-fg placeholder-muted/60 focus:outline-none focus:border-accent">
+              </div>
+            </div>
+            <div>
+              <label class="block text-xs text-muted mb-1">Email</label>
+              <input name="_jira_email" type="email" placeholder="you@acme.io"
+                     class="w-full bg-elevate border border-border rounded-lg px-3 h-9 text-sm text-fg placeholder-muted/60 focus:outline-none focus:border-accent"
+                     @input="(function(){
+                       const k=document.querySelector('[name=_jira_key]').value;
+                       const w=document.querySelector('[name=_jira_ws]').value;
+                       document.querySelector('[name=config_json]').value=JSON.stringify({project_key:k,workspace_slug:w,email:$event.target.value});
+                     })()">
+            </div>
+            <div>
+              <label class="block text-xs text-muted mb-1">API token</label>
+              <input type="password" name="secret" placeholder="token…"
+                     class="w-full bg-elevate border border-border rounded-lg px-3 h-9 text-sm text-fg placeholder-muted/60 focus:outline-none focus:border-accent">
+            </div>
+          </div>
+        </template>
+
+        {# Plane fields #}
+        <template x-if="kind === 'plane'">
+          <div class="space-y-3">
+            <div class="grid grid-cols-2 gap-2">
+              <div>
+                <label class="block text-xs text-muted mb-1">Workspace slug</label>
+                <input name="_plane_ws" placeholder="acme"
+                       class="w-full bg-elevate border border-border rounded-lg px-3 h-9 text-sm text-fg placeholder-muted/60 focus:outline-none focus:border-accent">
+              </div>
+              <div>
+                <label class="block text-xs text-muted mb-1">Project ID (UUID)</label>
+                <input name="_plane_pid" placeholder="uuid…"
+                       class="w-full bg-elevate border border-border rounded-lg px-3 h-9 text-sm text-fg placeholder-muted/60 focus:outline-none focus:border-accent"
+                       @input="(function(){
+                         const w=document.querySelector('[name=_plane_ws]').value;
+                         document.querySelector('[name=config_json]').value=JSON.stringify({workspace_slug:w,project_id:$event.target.value});
+                       })()">
+              </div>
+            </div>
+            <div>
+              <label class="block text-xs text-muted mb-1">API key</label>
+              <input type="password" name="secret" placeholder="token…"
+                     class="w-full bg-elevate border border-border rounded-lg px-3 h-9 text-sm text-fg placeholder-muted/60 focus:outline-none focus:border-accent">
+            </div>
+          </div>
+        </template>
+
+        {# File board fields #}
+        <template x-if="kind === 'file'">
+          <div>
+            <label class="block text-xs text-muted mb-1">Board path (optional)</label>
+            <input name="_file_path" placeholder="runtime/{project}/board.json"
+                   class="w-full bg-elevate border border-border rounded-lg px-3 h-9 text-sm text-fg placeholder-muted/60 focus:outline-none focus:border-accent"
+                   @input="document.querySelector('[name=config_json]').value=JSON.stringify({board_path:$event.target.value||'runtime/{project}/board.json'})">
+          </div>
+        </template>
+
+        {# hidden config_json, transport, base_url accumulated by the helpers above #}
+        <input type="hidden" name="config_json" value="{}">
+        <input type="hidden" name="transport" value="">
+        <input type="hidden" name="base_url" value="">
+
+        {# Roles #}
+        <div class="border border-border rounded-lg p-3 space-y-2">
+          <p class="text-xs font-medium text-fg mb-2">Roles</p>
+          <label class="flex items-start gap-2.5 cursor-pointer">
+            <input type="checkbox" name="is_source" value="true" class="accent-accent rounded mt-0.5 shrink-0">
+            <div>
+              <span class="text-sm text-fg">Source</span>
+              <p class="text-xs text-muted leading-snug">Read issues from this system</p>
+            </div>
+          </label>
+          <label class="flex items-start gap-2.5 cursor-pointer">
+            <input type="checkbox" name="is_sink" value="true" class="accent-accent rounded mt-0.5 shrink-0">
+            <div>
+              <span class="text-sm text-fg">Sink</span>
+              <p class="text-xs text-muted leading-snug">Push tickets to this system</p>
+            </div>
+          </label>
+          <label class="flex items-start gap-2.5 cursor-pointer">
+            <input type="checkbox" name="is_default_sink" value="true" class="accent-accent rounded mt-0.5 shrink-0">
+            <div>
+              <span class="text-sm text-fg">Default sink</span>
+              <p class="text-xs text-muted leading-snug">Fallback when no sink is specified on a run</p>
+            </div>
+          </label>
+        </div>
+
+        <div class="flex justify-between pt-1">
+          <button type="button" @click="step=1" class="px-4 h-9 rounded-lg border border-border text-sm text-muted hover:text-fg">← Back</button>
+          <button type="button" @click="step=3" class="px-4 h-9 rounded-lg bg-accent text-bg text-sm font-semibold hover:brightness-110">Continue →</button>
+        </div>
+      </div>
+
+      {# Step 3: Test connection #}
+      <div x-show="step === 3" class="space-y-3">
+        <p class="text-sm text-muted">Test the connection before saving (optional but recommended).</p>
+
+        <button type="button" @click="testConn()" :disabled="testing"
+                class="w-full h-9 rounded-lg border border-border text-sm text-fg hover:bg-elevate flex items-center justify-center gap-2 disabled:opacity-60">
+          <span x-show="testing" class="w-3.5 h-3.5 border-2 border-accent/40 border-t-accent rounded-full animate-spin"></span>
+          <span x-show="!testing">⚡ Test connection</span>
+          <span x-show="testing">Testing…</span>
+        </button>
+
+        <div x-show="healthResult" class="px-3 py-2 rounded-lg text-sm"
+             :class="healthResult?.status==='ok' ? 'bg-ok/10 text-ok' : 'bg-warn/10 text-warn'">
+          <span x-show="healthResult?.status==='ok'">✓ Connected</span>
+          <span x-show="healthResult?.status!=='ok'">⚠ </span>
+          <span x-text="healthResult?.message || (healthResult?.status==='ok' ? (healthResult.tool_count > 0 ? healthResult.tool_count+' tools loaded' : 'OK') : 'Check config')"></span>
+        </div>
+
+        <div class="flex justify-between pt-1">
+          <button type="button" @click="step=2" class="px-4 h-9 rounded-lg border border-border text-sm text-muted hover:text-fg">← Back</button>
+          <button type="button" @click="step=4" class="px-4 h-9 rounded-lg bg-accent text-bg text-sm font-semibold hover:brightness-110">Continue →</button>
+        </div>
+      </div>
+
+      {# Step 4: Review & save #}
+      <div x-show="step === 4" class="space-y-3">
+        <p class="text-sm text-muted">Review and save the connector.</p>
+        <div class="bg-elevate border border-border rounded-lg p-3 text-sm space-y-1">
+          <div class="flex justify-between"><span class="text-muted">Kind</span><span x-text="kind" class="text-fg capitalize"></span></div>
+          <div class="flex justify-between"><span class="text-muted">Health</span>
+            <span :class="healthResult?.status==='ok' ? 'text-ok' : 'text-muted'"
+                  x-text="healthResult?.status==='ok' ? '✓ OK' : healthResult ? '⚠ warn' : 'not tested'"></span>
+          </div>
+        </div>
+        <div class="flex justify-between pt-1">
+          <button type="button" @click="step=3" class="px-4 h-9 rounded-lg border border-border text-sm text-muted hover:text-fg">← Back</button>
+          <button type="submit" class="px-4 h-9 rounded-lg bg-accent text-bg text-sm font-semibold hover:brightness-110">Save connector</button>
+        </div>
+      </div>
+
+    </form>
+  </div>
+</div>
+</div>{# end x-data #}
+
+{% if rows %}
+<div class="bg-surface border border-border rounded-xl overflow-hidden">
+  <table class="w-full text-sm">
+    <thead>
+      <tr class="text-left text-muted text-xs uppercase tracking-wide">
+        <th class="font-medium px-5 py-2">Name</th>
+        <th class="font-medium px-3 py-2">Kind</th>
+        <th class="font-medium px-3 py-2">Access</th>
+        <th class="font-medium px-3 py-2">Roles</th>
+        <th class="font-medium px-3 py-2">Status</th>
+        <th class="font-medium px-3 py-2">Health</th>
+        <th class="font-medium px-5 py-2 text-right">Enabled</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in rows %}
+      {% set c = row.c %}
+      <tr class="border-t border-border/60 hover:bg-elevate/40">
+        <td class="px-5 py-2.5 font-medium">{{ c.name }}</td>
+        <td class="px-3 py-2.5"><span class="text-xs px-2 py-0.5 rounded bg-border text-muted">{{ c.kind.value }}</span></td>
+        <td class="px-3 py-2.5">
+          {% if row.mcp %}<span class="text-xs px-2 py-0.5 rounded bg-accent/15 text-accent">MCP</span>
+          {% else %}<span class="text-xs px-2 py-0.5 rounded bg-border text-muted">built-in</span>{% endif %}
+        </td>
+        <td class="px-3 py-2.5">
+          <span class="flex gap-1">
+            {% if c.is_source %}<span class="text-[10px] px-1.5 py-0.5 rounded bg-accent/15 text-accent">source</span>{% endif %}
+            {% if c.is_default_sink %}<span class="text-[10px] px-1.5 py-0.5 rounded bg-ok/15 text-ok">default sink</span>
+            {% elif c.is_sink %}<span class="text-[10px] px-1.5 py-0.5 rounded bg-ok/15 text-ok">sink</span>{% endif %}
+            {% if not c.is_source and not c.is_sink %}<span class="text-[10px] text-muted/60">unused</span>{% endif %}
+          </span>
+        </td>
+        <td class="px-3 py-2.5">
+          {% if row.issues %}
+            <span class="text-warn text-xs cursor-help" title="{{ row.issues|join('; ') }}">⚠ {{ row.issues|length }} issue(s)</span>
+          {% else %}
+            <span class="text-ok text-xs">✓ valid</span>
+          {% endif %}
+        </td>
+        <td class="px-3 py-2.5">
+          {# Health dot — live-fetched via HTMX on page load #}
+          <span id="health-{{ c.id }}"
+                hx-get="/ui/connectors/{{ c.id }}/health-dot"
+                hx-trigger="load"
+                hx-swap="outerHTML"
+                class="w-2 h-2 inline-block rounded-full bg-border/60 cursor-default" title="checking…"></span>
+        </td>
+        <td class="px-5 py-2.5 text-right">
+          <span class="w-2 h-2 inline-block rounded-full {{ 'bg-ok' if c.enabled else 'bg-muted/40' }}"></span>
+        </td>
+      </tr>
+      {% if row.issues %}
+      <tr class="bg-warn/5">
+        <td colspan="7" class="px-5 py-2 text-xs text-warn">
+          {% for i in row.issues %}• {{ i }}{% if not loop.last %} &nbsp; {% endif %}{% endfor %}
+        </td>
+      </tr>
+      {% endif %}
       {% endfor %}
-    </table>
-  {% else %}
-    <p class="muted">No connectors yet — use the guide below to add one.</p>
-  {% endif %}
-  <p style="margin-top:1rem"><a class="btn" href="/admin" target="_blank">Add / edit connectors</a></p>
+    </tbody>
+  </table>
+</div>
+{% else %}
+<div class="bg-surface border border-border rounded-xl px-5 py-12 text-center text-muted text-sm">
+  No connectors yet.
+  <button onclick="document.querySelector('[x-data]').__x.$data.open=true"
+          class="text-accent hover:underline">Add one →</button>
+</div>
+{% endif %}
+
+<div class="mt-5 bg-surface border border-border rounded-xl p-5 text-sm leading-relaxed">
+  <h2 class="text-sm font-semibold text-fg mb-2">Setup at a glance</h2>
+  <ul class="space-y-1.5 text-muted">
+    <li><span class="text-fg">MCP (preferred):</span> set <code>transport=http</code> + the server
+      <code>base_url</code>; the token goes in <code>secret</code> (sent as a Bearer header). Unlimited platforms.</li>
+    <li><span class="text-fg">Built-in (backup):</span> leave transport blank for the bundled GitHub/Jira/Plane clients.</li>
+    <li><span class="text-fg">Roles:</span> a connector can be a <em>source</em>, a <em>sink</em>, or both —
+      a default sink must also be a sink, and only github/jira/plane can be sources.</li>
+    <li>Config examples — github <code>{"repo":"owner/name"}</code>, jira
+      <code>{"email":"…","project_key":"ENG"}</code>, plane <code>{"workspace_slug":"…","project_id":"…"}</code>.</li>
+  </ul>
+  <p class="text-xs text-muted/70 mt-3">Add / edit connectors in the
+    <a href="/admin/connector/list" target="_blank" class="text-accent hover:underline">Admin portal</a>.</p>
 </div>
 
-<!-- ── Setup guide ── -->
-<h2 style="margin-top:1.5rem">Setup guide</h2>
-<p class="muted" style="margin:.25rem 0 .75rem">
-  Select a connector kind for the config template, required fields, and where to get the API key.
-  You can add <strong>multiple connectors of the same kind</strong> (e.g. two GitHub connectors for
-  different repos) — each connector row is independent and can be selected per-run.
-</p>
-
-<div class="card">
-  <div class="guide-tabs">
-    <button class="guide-tab active" onclick="showGuide('github', this)">GitHub</button>
-    <button class="guide-tab" onclick="showGuide('jira', this)">Jira</button>
-    <button class="guide-tab" onclick="showGuide('plane', this)">Plane</button>
-  </div>
-
-  <!-- ── GitHub ── -->
-  <div id="guide-github" class="guide-panel active">
-    <p style="margin:.5rem 0 .25rem;color:var(--muted);font-size:.87rem">
-      GitHub Issues (REST API v3) — use as an issue source, or to post spec comments back to issues.
-    </p>
-
-    <strong style="font-size:.8rem;color:var(--muted);text-transform:uppercase;letter-spacing:.04em">Config JSON</strong>
-    <div class="config-block" id="cfg-github">{"repo": "owner/name"}<button class="copy-btn" onclick="copyBlock('cfg-github', this)">Copy</button></div>
-
-    <table class="field-ref">
-      <tr><th>Field</th><th>Required?</th><th>Description</th></tr>
-      <tr>
-        <td>repo</td>
-        <td><span class="badge-req">required</span></td>
-        <td>Repository in <code>owner/name</code> format — e.g. <code>makeplane/plane</code>.</td>
-      </tr>
-    </table>
-
-    <div class="hint-row">
-      <div class="hint-box">
-        <strong>Secret (API token)</strong>
-        GitHub Personal Access Token (PAT).<br>
-        Needs <code>repo</code> scope for private repos; <code>public_repo</code> for public repos.<br>
-        Generate at <strong>GitHub → Settings → Developer settings → Personal access tokens</strong>.
-      </div>
-      <div class="hint-box">
-        <strong>Base URL</strong>
-        Leave <strong>blank</strong> for github.com.<br>
-        For GitHub Enterprise Server set the API root, e.g.<br>
-        <code>https://github.your-org.com/api/v3</code>
-      </div>
-    </div>
-
-    <div class="multi-note">
-      <strong style="color:#4ade80">Multiple repos?</strong>
-      Add one connector row per repo — e.g. <em>GitHub – makeplane/plane</em> and
-      <em>GitHub – my-org/service</em> — each with a different <code>{"repo": "..."}</code>.
-      When starting a run, pick the right connector from the "Issue source" dropdown.
-    </div>
-  </div>
-
-  <!-- ── Jira ── -->
-  <div id="guide-jira" class="guide-panel">
-    <p style="margin:.5rem 0 .25rem;color:var(--muted);font-size:.87rem">
-      Jira Cloud (REST API v3) — use as an issue source and/or a ticket sink for PM-generated stories.
-    </p>
-
-    <strong style="font-size:.8rem;color:var(--muted);text-transform:uppercase;letter-spacing:.04em">Config JSON</strong>
-    <div class="config-block" id="cfg-jira">{
-  "email":      "you@example.com",
-  "project_key": "ENG",
-  "issue_type":  "Story"
-}<button class="copy-btn" onclick="copyBlock('cfg-jira', this)">Copy</button></div>
-
-    <table class="field-ref">
-      <tr><th>Field</th><th>Required?</th><th>Description</th></tr>
-      <tr>
-        <td>email</td>
-        <td><span class="badge-req">required</span></td>
-        <td>Your Atlassian account email address.</td>
-      </tr>
-      <tr>
-        <td>project_key</td>
-        <td><span class="badge-req">required</span></td>
-        <td>Jira project key — the short prefix on all issue keys, e.g. <code>ENG</code>, <code>PROJ</code>. Tickets are created here.</td>
-      </tr>
-      <tr>
-        <td>issue_type</td>
-        <td><span class="badge-opt">optional</span></td>
-        <td>Default issue type for stories. Defaults to <code>Story</code>.</td>
-      </tr>
-      <tr>
-        <td>spike_issue_type</td>
-        <td><span class="badge-opt">optional</span></td>
-        <td>Issue type used for spikes / technical tasks. Defaults to <code>Task</code>.</td>
-      </tr>
-    </table>
-
-    <div class="hint-row">
-      <div class="hint-box">
-        <strong>Secret (API token)</strong>
-        Jira API token (not your password).<br>
-        Generate at <strong>Atlassian → Account settings → Security → API tokens</strong>:<br>
-        <code>https://id.atlassian.com/manage-profile/security/api-tokens</code>
-      </div>
-      <div class="hint-box">
-        <strong>Base URL (required)</strong>
-        Your Atlassian site URL — without a trailing slash.<br>
-        Example: <code>https://your-domain.atlassian.net</code><br>
-        Found in the browser address bar when logged into Jira.
-      </div>
-    </div>
-  </div>
-
-  <!-- ── Plane ── -->
-  <div id="guide-plane" class="guide-panel">
-    <p style="margin:.5rem 0 .25rem;color:var(--muted);font-size:.87rem">
-      Plane (REST API) — use as an issue source and/or a ticket sink for PM-generated stories.
-    </p>
-
-    <strong style="font-size:.8rem;color:var(--muted);text-transform:uppercase;letter-spacing:.04em">Config JSON</strong>
-    <div class="config-block" id="cfg-plane">{
-  "workspace_slug": "acme",
-  "project_id":     "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
-}<button class="copy-btn" onclick="copyBlock('cfg-plane', this)">Copy</button></div>
-
-    <table class="field-ref">
-      <tr><th>Field</th><th>Required?</th><th>Description</th></tr>
-      <tr>
-        <td>workspace_slug</td>
-        <td><span class="badge-req">required</span></td>
-        <td>Your Plane workspace slug — visible in the URL after <code>app.plane.so/</code>, e.g. <code>acme</code>.</td>
-      </tr>
-      <tr>
-        <td>project_id</td>
-        <td><span class="badge-req">required</span></td>
-        <td>Plane project UUID. Found in <strong>Project → Settings</strong> — copy the ID from the URL or the settings page.</td>
-      </tr>
-    </table>
-
-    <div class="hint-row">
-      <div class="hint-box">
-        <strong>Secret (API key)</strong>
-        Plane API key.<br>
-        Generate at <strong>Workspace Settings → API Tokens</strong> (or your profile settings).<br>
-        Self-hosted Plane: same path, just on your own domain.
-      </div>
-      <div class="hint-box">
-        <strong>Base URL</strong>
-        Leave <strong>blank</strong> for Plane Cloud (<code>https://api.plane.so</code>).<br>
-        For self-hosted Plane, set your API root, e.g.<br>
-        <code>https://plane.your-org.com</code>
-      </div>
-    </div>
-  </div>
-</div>
-
-<script>
-function showGuide(kind, btn) {
-  document.querySelectorAll('.guide-panel').forEach(p => p.classList.remove('active'));
-  document.querySelectorAll('.guide-tab').forEach(t => t.classList.remove('active'));
-  document.getElementById('guide-' + kind).classList.add('active');
-  btn.classList.add('active');
-}
-
-function copyBlock(id, btn) {
-  const el = document.getElementById(id);
-  const text = el.childNodes[0].textContent;  // text node before the button
-  navigator.clipboard.writeText(text.trim()).then(() => {
-    btn.textContent = 'Copied!';
-    btn.classList.add('copied');
-    setTimeout(() => { btn.textContent = 'Copy'; btn.classList.remove('copied'); }, 1800);
-  });
-}
-</script>
 {% endblock %}

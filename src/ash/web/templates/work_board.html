@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}Work board{% endblock %}
+{% block breadcrumb %}Work board{% endblock %}
+{% block body %}
+
+<div class="flex items-center justify-between mb-5">
+  <div>
+    <h1 class="text-xl font-semibold">Work board</h1>
+    <p class="text-sm text-muted mt-0.5">Recent runs by status. Click a card to open the live run.</p>
+  </div>
+  <a href="/ui/runs/new"
+     class="bg-accent text-bg font-semibold text-sm rounded-lg px-4 h-9 inline-flex items-center hover:brightness-110">
+    + New run
+  </a>
+</div>
+
+<div class="grid gap-3 md:grid-cols-4">
+  {% set dot = {"running":"bg-accent","awaiting_review":"bg-warn","completed":"bg-ok","failed":"bg-danger"} %}
+  {% for col in columns %}
+  <div class="bg-bg/40 border border-border rounded-xl flex flex-col min-h-[8rem]">
+    <header class="flex items-center gap-2 px-4 h-11 border-b border-border">
+      <span class="w-2 h-2 rounded-full {{ dot.get(col.key, 'bg-muted') }}"></span>
+      <span class="text-sm font-medium">{{ col.label }}</span>
+      <span class="ml-auto text-xs text-muted bg-surface rounded-full px-2 py-0.5">{{ col.runs|length }}</span>
+    </header>
+    <div class="p-2 space-y-2 flex-1">
+      {% for r in col.runs %}
+      {% set mt = {"raw_to_spec":"bg-accent/15 text-accent","spec_ready":"bg-ok/15 text-ok",
+                   "raw_to_dev":"bg-warn/15 text-warn"}.get(r.intake_mode, "bg-border text-muted") %}
+      <a href="/ui/runs/{{ r.run_id }}"
+         class="block bg-surface border border-border rounded-lg p-3 hover:border-accent/50 transition-colors">
+        <div class="flex items-center justify-between mb-1">
+          <span class="font-mono text-xs text-accent">{{ r.run_id[:8] }}</span>
+          <span class="text-[10px] px-1.5 py-0.5 rounded {{ mt }}">{{ r.intake_mode }}</span>
+        </div>
+        <div class="text-sm truncate">{{ r.project }} · {{ r.item_id or "—" }}</div>
+        <div class="text-[11px] text-muted/70 mt-1">{{ r.created_at.strftime("%b %d, %H:%M") }}</div>
+      </a>
+      {% else %}
+      <div class="text-xs text-muted/50 text-center py-6">—</div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endfor %}
+</div>
+
+{% endblock %}

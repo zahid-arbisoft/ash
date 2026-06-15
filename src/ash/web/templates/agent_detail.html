@@ -1,0 +1,331 @@
+{% extends "base.html" %}
+{% block title %}{{ agent_name | capitalize }} Agent{% endblock %}
+{% block breadcrumb %}<a href="/ui/agents?project={{ selected }}" class="hover:underline">Agents</a> / {{ agent_name | capitalize }}{% endblock %}
+{% block body %}
+
+{% set roles = {
+  "pm": "Generates specs &amp; tickets from requirements",
+  "research": "Investigates spikes; produces implementation plans",
+  "coding": "Implements tickets; commits and opens PRs",
+  "reviewer": "Reviews PRs in one pass; tags findings by severity",
+  "fixer": "Addresses review feedback; updates the PR",
+  "rfc": "Drafts RFCs before planning",
+} %}
+
+{% set status_colors = {
+  "pending":     "bg-warn/15 text-warn",
+  "in_progress": "bg-accent/15 text-accent",
+  "completed":   "bg-ok/15 text-ok",
+  "failed":      "bg-danger/15 text-danger",
+  "cancelled":   "bg-border text-muted",
+  "scheduled":   "bg-border text-muted",
+} %}
+
+{# ── Header ── #}
+<div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6">
+  <div>
+    <h1 class="text-xl font-semibold capitalize">{{ agent_name }} Agent</h1>
+    <p class="text-sm text-muted mt-0.5">{{ roles.get(agent_name, "") }}</p>
+  </div>
+  <div class="flex items-center gap-2">
+    {% if projects %}
+    <form method="get" action="/ui/agents/{{ agent_name }}">
+      <select name="project" onchange="this.form.submit()"
+              class="!w-auto bg-surface border border-border rounded-lg px-3 h-9 text-sm">
+        {% for p in projects %}<option value="{{ p }}" {{ "selected" if p == selected }}>{{ p }}</option>{% endfor %}
+      </select>
+    </form>
+    {% endif %}
+    {% if not built %}
+    <span class="text-xs px-2 py-0.5 rounded-full bg-border text-muted">not built</span>
+    {% endif %}
+  </div>
+</div>
+
+{# ── Stats bar ── #}
+<div class="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-5 gap-3 mb-6">
+  {% set stat_items = [
+    ("Pending",     stats.get("pending", 0),     "text-warn"),
+    ("In progress", stats.get("in_progress", 0), "text-accent"),
+    ("Completed",   stats.get("completed", 0),   "text-ok"),
+    ("Failed",      stats.get("failed", 0),       "text-danger"),
+    ("Success rate", stats.get("success_rate", 0)|string + "%", "text-fg"),
+  ] %}
+  {% for label, val, color in stat_items %}
+  <div class="bg-surface border border-border rounded-xl px-4 py-3">
+    <div class="text-2xl font-bold {{ color }}">{{ val }}</div>
+    <div class="text-xs text-muted mt-0.5">{{ label }}</div>
+  </div>
+  {% endfor %}
+</div>
+
+<div class="grid lg:grid-cols-3 gap-6">
+
+  {# ── Task board (2/3) ── #}
+  <section class="lg:col-span-2" x-data="{ assignOpen: false }">
+
+    {# Assign Task modal #}
+    <div x-show="assignOpen" x-cloak
+         class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm"
+         @keydown.escape.window="assignOpen=false">
+      <div class="bg-surface border border-border rounded-2xl shadow-2xl w-full max-w-md mx-4 p-6"
+           @click.stop>
+        <div class="flex items-center justify-between mb-4">
+          <h3 class="font-semibold text-fg capitalize">Assign task to {{ agent_name }}</h3>
+          <button @click="assignOpen=false" class="text-muted hover:text-fg text-xl leading-none">×</button>
+        </div>
+        <form method="post" action="/ui/tasks/assign" class="space-y-4">
+          <input type="hidden" name="agent_name" value="{{ agent_name }}">
+          <input type="hidden" name="project" value="{{ selected }}">
+
+          <div>
+            <label class="block text-xs text-muted mb-1">Run</label>
+            {% if recent_runs %}
+            <select name="run_id" required
+                    class="w-full bg-bg border border-border rounded-lg px-3 h-9 text-sm font-mono">
+              <option value="" disabled selected>Select a run…</option>
+              {% for r in recent_runs %}
+              <option value="{{ r.run_id }}">{{ r.run_id[:12] }} · {{ r.item_id }} ({{ r.status }})</option>
+              {% endfor %}
+            </select>
+            {% else %}
+            <input type="text" name="run_id" required placeholder="Paste run ID (32 hex chars)"
+                   class="w-full bg-bg border border-border rounded-lg px-3 h-9 text-sm font-mono"
+                   pattern="[0-9a-f]{32}" title="32-character hex run ID">
+            {% endif %}
+            <p class="text-[11px] text-muted mt-1">
+              Run must be paused at the <strong class="capitalize">{{ agent_name }}</strong> trigger gate —
+              or you can assign it now and trigger later.
+            </p>
+          </div>
+
+          <div>
+            <label class="block text-xs text-muted mb-1">Title <span class="text-muted/50">(optional)</span></label>
+            <input type="text" name="title" placeholder="e.g. Implement login flow"
+                   class="w-full bg-bg border border-border rounded-lg px-3 h-9 text-sm">
+          </div>
+
+          <div class="flex gap-2 pt-1">
+            <button type="submit"
+                    class="flex-1 bg-accent text-bg font-semibold text-sm rounded-lg h-9 hover:brightness-110">
+              Assign task
+            </button>
+            <button type="button" @click="assignOpen=false"
+                    class="px-4 h-9 rounded-lg border border-border text-muted text-sm hover:text-fg">
+              Cancel
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <div class="flex items-center justify-between mb-3">
+      <h2 class="font-semibold">Tasks</h2>
+      <div class="flex items-center gap-2">
+        {# Assign Task button #}
+        <button @click="assignOpen=true"
+                class="text-xs font-semibold px-3 h-7 rounded-lg bg-accent text-bg hover:brightness-110 inline-flex items-center gap-1">
+          + Assign task
+        </button>
+        {# Filter tabs #}
+        <div class="flex gap-1">
+          <a href="/ui/agents/{{ agent_name }}?project={{ selected }}"
+             class="text-xs px-3 h-7 rounded-full inline-flex items-center
+                    {{ 'bg-accent text-bg' if not filter_status else 'bg-surface border border-border text-muted hover:text-fg' }}">
+            All
+          </a>
+          {% for s in statuses %}
+          <a href="/ui/agents/{{ agent_name }}?project={{ selected }}&status={{ s }}"
+             class="text-xs px-3 h-7 rounded-full inline-flex items-center capitalize
+                    {{ ('bg-accent text-bg' if filter_status == s else 'bg-surface border border-border text-muted hover:text-fg') }}">
+            {{ s.replace("_", " ") }}
+          </a>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+
+    {% if tasks %}
+    <div class="bg-surface border border-border rounded-xl divide-y divide-border/60">
+      {% for t in tasks %}
+      <div class="flex items-start gap-3 px-4 py-3.5">
+        <span class="mt-0.5 text-xs px-2 py-0.5 rounded-full whitespace-nowrap {{ status_colors.get(t.status, 'bg-border text-muted') }}">
+          {{ t.status.replace("_", " ") }}
+        </span>
+        <div class="min-w-0 flex-1">
+          <div class="text-sm font-medium truncate">{{ t.title or t.item_id }}</div>
+          <div class="flex flex-wrap gap-2 mt-0.5">
+            <a href="/ui/runs/{{ t.run_id }}" class="text-xs font-mono text-accent hover:underline">
+              {{ t.run_id[:8] }}
+            </a>
+            <span class="text-xs text-muted">{{ t.project }}</span>
+            {% if t.retry_count %}<span class="text-xs text-muted">retry {{ t.retry_count }}/{{ t.max_retries }}</span>{% endif %}
+            {% if t.error %}<span class="text-xs text-danger truncate max-w-[24rem]" title="{{ t.error }}">{{ t.error[:80] }}{% if t.error|length > 80 %}…{% endif %}</span>{% endif %}
+            {% if t.result_ref %}
+              {% if t.result_ref.startswith("http") %}
+                <a href="{{ t.result_ref }}" target="_blank" class="text-xs text-accent hover:underline">result ↗</a>
+              {% else %}
+                <span class="text-xs text-muted font-mono">{{ t.result_ref }}</span>
+              {% endif %}
+            {% endif %}
+          </div>
+          <div class="text-[11px] text-muted/60 mt-0.5">
+            Created {{ t.created_at.strftime("%b %d, %H:%M") }}
+            {% if t.started_at %} · Started {{ t.started_at.strftime("%H:%M") }}{% endif %}
+            {% if t.completed_at %} · Done {{ t.completed_at.strftime("%H:%M") }}{% endif %}
+          </div>
+        </div>
+        {# Action buttons #}
+        <div class="flex gap-1 shrink-0">
+          {% if t.status == "pending" %}
+          <form method="post" action="/ui/tasks/{{ t.id }}/trigger">
+            <button type="submit"
+                    class="text-xs font-semibold px-3 h-7 rounded-lg bg-accent text-bg hover:brightness-110">
+              Trigger
+            </button>
+          </form>
+          <form method="post" action="/ui/tasks/{{ t.id }}/cancel">
+            <button type="submit"
+                    class="text-xs px-3 h-7 rounded-lg border border-border text-muted hover:text-fg hover:border-fg/30">
+              Cancel
+            </button>
+          </form>
+          {% elif t.status == "failed" and t.retry_count < t.max_retries %}
+          <form method="post" action="/ui/tasks/{{ t.id }}/trigger">
+            <button type="submit"
+                    class="text-xs font-semibold px-3 h-7 rounded-lg border border-warn/40 text-warn hover:bg-warn/10">
+              Retry
+            </button>
+          </form>
+          {% endif %}
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+    {% else %}
+    <div class="bg-surface border border-border rounded-xl px-5 py-12 text-center text-muted text-sm">
+      No tasks{% if filter_status %} with status "{{ filter_status | replace("_", " ") }}"{% endif %}.
+    </div>
+    {% endif %}
+  </section>
+
+  {# ── Config panel (1/3) ── #}
+  <section>
+    <h2 class="font-semibold mb-3">Configuration</h2>
+    <div class="bg-surface border border-border rounded-xl p-5">
+
+      {# Current effective policy (read-only header) #}
+      {% if policy %}
+      <dl class="space-y-2 text-sm mb-5 pb-5 border-b border-border/60">
+        <div class="flex items-center justify-between">
+          <dt class="text-muted">Trigger</dt>
+          <dd>
+            {% set tt = "bg-accent/15 text-accent" if policy.trigger == "auto" else "bg-border text-muted" %}
+            <span class="text-xs px-2 py-0.5 rounded-full {{ tt }}">{{ policy.trigger }}</span>
+          </dd>
+        </div>
+        <div class="flex items-center justify-between">
+          <dt class="text-muted">Enabled</dt>
+          <dd><span class="w-2 h-2 inline-block rounded-full {{ 'bg-ok' if policy.enabled else 'bg-muted/40' }}"></span></dd>
+        </div>
+        <div class="flex items-center justify-between">
+          <dt class="text-muted">Concurrency</dt>
+          <dd class="text-fg">{{ policy.concurrency_limit }}</dd>
+        </div>
+        <div class="flex items-center justify-between">
+          <dt class="text-muted">Daily quota</dt>
+          <dd class="text-fg">{{ policy.daily_quota or "∞" }}</dd>
+        </div>
+        <div class="flex items-center justify-between">
+          <dt class="text-muted">Max retries</dt>
+          <dd class="text-fg">{{ policy.max_retries }}</dd>
+        </div>
+        {% if policy.schedule_cron %}
+        <div class="flex items-center justify-between">
+          <dt class="text-muted">Cron</dt>
+          <dd class="font-mono text-xs">{{ policy.schedule_cron }}</dd>
+        </div>
+        {% endif %}
+        <div class="flex items-center justify-between">
+          <dt class="text-muted">Model</dt>
+          <dd class="font-mono text-xs text-muted">{{ model }}</dd>
+        </div>
+      </dl>
+      {% endif %}
+
+      {# Edit form #}
+      <form method="post" action="/ui/agents/{{ agent_name }}/config" class="space-y-3 text-sm">
+        <input type="hidden" name="project" value="{{ selected }}">
+
+        <div>
+          <label class="block text-xs text-muted mb-1">Trigger</label>
+          <select name="trigger" class="w-full bg-bg border border-border rounded-lg px-3 h-9 text-sm">
+            <option value="auto" {{ "selected" if (not policy or policy.trigger == "auto") }}>auto</option>
+            <option value="manual" {{ "selected" if (policy and policy.trigger == "manual") }}>manual</option>
+          </select>
+        </div>
+
+        <div class="flex items-center gap-2">
+          <input type="checkbox" id="enabled_{{ agent_name }}" name="enabled" value="on"
+                 {{ "checked" if (not policy or policy.enabled) }}
+                 class="w-4 h-4 accent-[var(--color-accent)]">
+          <label for="enabled_{{ agent_name }}" class="text-sm select-none">Enabled</label>
+        </div>
+
+        <div>
+          <label class="block text-xs text-muted mb-1">Concurrency limit</label>
+          <input type="number" name="concurrency_limit" min="1" max="20"
+                 value="{{ policy.concurrency_limit if policy else 1 }}"
+                 class="w-full bg-bg border border-border rounded-lg px-3 h-9 text-sm">
+        </div>
+
+        <div>
+          <label class="block text-xs text-muted mb-1">Daily quota (blank = unlimited)</label>
+          <input type="number" name="daily_quota" min="1"
+                 value="{{ policy.daily_quota if policy and policy.daily_quota else '' }}"
+                 placeholder="∞"
+                 class="w-full bg-bg border border-border rounded-lg px-3 h-9 text-sm">
+        </div>
+
+        <div>
+          <label class="block text-xs text-muted mb-1">Max retries</label>
+          <input type="number" name="max_retries" min="0" max="10"
+                 value="{{ policy.max_retries if policy else 0 }}"
+                 class="w-full bg-bg border border-border rounded-lg px-3 h-9 text-sm">
+        </div>
+
+        <div>
+          <label class="block text-xs text-muted mb-1">Schedule cron (blank = always)</label>
+          <input type="text" name="schedule_cron"
+                 value="{{ policy.schedule_cron if policy and policy.schedule_cron else '' }}"
+                 placeholder="e.g. 0 9 * * 1-5"
+                 class="w-full bg-bg border border-border rounded-lg px-3 h-9 text-sm font-mono">
+        </div>
+
+        <div class="pt-2 flex gap-2">
+          <button type="submit"
+                  class="flex-1 bg-accent text-bg font-semibold text-sm rounded-lg h-9 hover:brightness-110">
+            Save override
+          </button>
+        </div>
+      </form>
+
+      {# Reset to YAML #}
+      <form method="post" action="/ui/agents/{{ agent_name }}/config/reset" class="mt-2">
+        <input type="hidden" name="project" value="{{ selected }}">
+        <button type="submit"
+                class="w-full border border-border text-muted text-xs rounded-lg h-8 hover:text-fg hover:border-fg/30">
+          Reset to project.yaml defaults
+        </button>
+      </form>
+
+      <p class="text-[11px] text-muted/60 mt-3">
+        DB overrides take precedence over <span class="font-mono">projects/{{ selected }}.yaml</span>.
+        Resetting removes the DB record and reverts to YAML.
+      </p>
+    </div>
+  </section>
+
+</div>
+
+{% endblock %}

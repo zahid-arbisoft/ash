@@ -16,6 +16,7 @@ from ash.agents.intake import IntakeAgent
 from ash.agents.pm import PMAgent, PMPublishAgent
 from ash.agents.research import ResearchAgent
 from ash.agents.reviewer import ReviewerAgent
+from ash.agents.rfc import RFCAgent
 from ash.config.settings import Settings
 from ash.graph.builder import build_graph
 from ash.graph.nodes import Agent
@@ -33,6 +34,7 @@ def build_agents(
         "intake": IntakeAgent(settings, provider=intake_provider),
         "pm": PMAgent(settings, model=pm_model),
         "pm_publish": PMPublishAgent(settings),
+        "rfc": RFCAgent(settings),
         "research": ResearchAgent(settings),
         "coding": CodingAgent(settings),
         "reviewer": ReviewerAgent(settings),

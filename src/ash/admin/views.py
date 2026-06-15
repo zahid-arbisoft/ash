@@ -4,7 +4,16 @@ from __future__ import annotations
 
 from sqladmin import ModelView
 
-from ash.db.models import AdminUser, Connector, RunRecord
+from ash.db.models import (
+    AdminUser,
+    AgentPolicyRecord,
+    AgentRunMetric,
+    AgentTask,
+    Connector,
+    RunRecord,
+    SpecRecord,
+    StoryRecord,
+)
 
 
 class ConnectorAdmin(ModelView, model=Connector):
@@ -76,9 +85,105 @@ class RunRecordAdmin(ModelView, model=RunRecord):
         RunRecord.project,
         RunRecord.item_id,
         RunRecord.intake_mode,
+        RunRecord.story_mode,
+        RunRecord.status,
         RunRecord.created_at,
     ]
     column_default_sort = [(RunRecord.created_at, True)]
+
+
+class SpecRecordAdmin(ModelView, model=SpecRecord):
+    name = "Spec"
+    name_plural = "Specs"
+    icon = "fa-solid fa-file-lines"
+    can_create = False
+    can_edit = False
+    column_list = [
+        SpecRecord.run_id,
+        SpecRecord.project,
+        SpecRecord.item_id,
+        SpecRecord.epic_title,
+        SpecRecord.ticket_count,
+        SpecRecord.spike_count,
+        SpecRecord.created_at,
+    ]
+    column_searchable_list = [SpecRecord.epic_title, SpecRecord.item_id]
+    column_default_sort = [(SpecRecord.created_at, True)]
+
+
+class StoryRecordAdmin(ModelView, model=StoryRecord):
+    name = "Story"
+    name_plural = "Stories"
+    icon = "fa-solid fa-diagram-project"
+    can_create = False
+    can_edit = False
+    column_list = [
+        StoryRecord.run_id,
+        StoryRecord.ticket_id,
+        StoryRecord.project,
+        StoryRecord.title,
+        StoryRecord.status,
+        StoryRecord.pr_url,
+        StoryRecord.failed_step,
+        StoryRecord.updated_at,
+    ]
+    column_searchable_list = [StoryRecord.run_id, StoryRecord.ticket_id]
+    column_default_sort = [(StoryRecord.updated_at, True)]
+
+
+class AgentTaskAdmin(ModelView, model=AgentTask):
+    name = "Agent task"
+    name_plural = "Agent tasks"
+    icon = "fa-solid fa-list-ol"
+    can_create = False
+    can_edit = False
+    column_list = [
+        AgentTask.id,
+        AgentTask.agent_name,
+        AgentTask.project,
+        AgentTask.run_id,
+        AgentTask.ticket_id,
+        AgentTask.status,
+        AgentTask.created_at,
+    ]
+    column_searchable_list = [AgentTask.run_id, AgentTask.agent_name]
+    column_default_sort = [(AgentTask.created_at, True)]
+
+
+class AgentRunMetricAdmin(ModelView, model=AgentRunMetric):
+    name = "Agent metric"
+    name_plural = "Agent metrics"
+    icon = "fa-solid fa-chart-simple"
+    can_create = False
+    can_edit = False
+    column_list = [
+        AgentRunMetric.id,
+        AgentRunMetric.run_id,
+        AgentRunMetric.ticket_id,
+        AgentRunMetric.agent_name,
+        AgentRunMetric.model,
+        AgentRunMetric.total_tokens,
+        AgentRunMetric.duration_ms,
+        AgentRunMetric.status,
+        AgentRunMetric.created_at,
+    ]
+    column_searchable_list = [AgentRunMetric.run_id, AgentRunMetric.agent_name]
+    column_default_sort = [(AgentRunMetric.created_at, True)]
+
+
+class AgentPolicyRecordAdmin(ModelView, model=AgentPolicyRecord):
+    name = "Agent policy"
+    name_plural = "Agent policies"
+    icon = "fa-solid fa-sliders"
+    column_list = [
+        AgentPolicyRecord.id,
+        AgentPolicyRecord.project,
+        AgentPolicyRecord.agent_name,
+        AgentPolicyRecord.trigger,
+        AgentPolicyRecord.enabled,
+        AgentPolicyRecord.updated_at,
+    ]
+    column_searchable_list = [AgentPolicyRecord.project, AgentPolicyRecord.agent_name]
 
 
 class AdminUserAdmin(ModelView, model=AdminUser):

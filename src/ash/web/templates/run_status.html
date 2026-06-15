@@ -1,297 +1,49 @@
 {% extends "base.html" %}
 {% block title %}Run {{ run_id[:8] }}{% endblock %}
+{% block breadcrumb %}<a href="/ui/runs" class="hover:text-fg">Runs</a> / {{ run_id[:8] }}{% endblock %}
 {% block body %}
-<style>
-  .status-bar { display:flex; align-items:center; gap:.75rem; flex-wrap:wrap; }
-  .pill-running  { background:#1a3a1a; color:#4ade80; border-color:#2d6b2d; }
-  .pill-awaiting { background:#3a2e00; color:#fbbf24; border-color:#6b5200; }
-  .pill-completed{ background:#1a2a3a; color:#60a5fa; border-color:#2d4a6b; }
-  .pill-failed   { background:#3a1a1a; color:#f87171; border-color:#6b2d2d; }
 
-  /* Review gate */
-  .review-gate { border-color:#6b5200; background:#1c1800; }
-  .review-gate h2 { color:#fbbf24; margin-top:0; }
-  .review-actions { display:flex; gap:1rem; margin-top:1rem; }
-  .btn-approve { background:#16a34a; color:#fff; }
-  .btn-approve:hover { background:#15803d; }
-  .btn-reject  { background:#dc2626; color:#fff; }
-  .btn-reject:hover  { background:#b91c1c; }
-  .btn:disabled { opacity:.5; cursor:not-allowed; }
-
-  /* Spec sections */
-  .spec-section { margin:1.25rem 0 0; }
-  .spec-section h3 { font-size:.95rem; color:var(--muted); margin:.75rem 0 .4rem; text-transform:uppercase; letter-spacing:.05em; }
-  .spec-section p, .spec-section li { line-height:1.6; }
-  .spec-section ul { margin:.25rem 0; padding-left:1.25rem; }
-  .chips { display:flex; flex-wrap:wrap; gap:.4rem; margin:.25rem 0; }
-  .chip { font-size:.75rem; padding:.15rem .55rem; border-radius:999px; background:#0b0d10; border:1px solid var(--border); color:var(--muted); }
-
-  /* Tickets grid */
-  .tickets-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(320px,1fr)); gap:1rem; margin-top:.75rem; }
-  .ticket-card { background:#0b0d10; border:1px solid var(--border); border-radius:8px; padding:.9rem 1rem; }
-  .ticket-meta { display:flex; gap:.5rem; align-items:center; margin-bottom:.5rem; flex-wrap:wrap; }
-  .ticket-id { font-size:.75rem; font-weight:700; color:var(--muted); }
-  .ticket-title { font-size:.95rem; font-weight:600; margin:.25rem 0; }
-  .ticket-desc  { font-size:.85rem; color:var(--muted); line-height:1.5; }
-  .ticket-footer { margin-top:.6rem; font-size:.75rem; color:var(--muted); }
-  .ticket-footer span { margin-right:.75rem; }
-
-  .type-feature  { background:#1a2a4a; color:#93c5fd; border-color:#2d4a7a; }
-  .type-bug      { background:#3a1a1a; color:#fca5a5; border-color:#7a2d2d; }
-  .type-refactor { background:#2a1a3a; color:#c4b5fd; border-color:#5a3a7a; }
-  .type-test     { background:#1a3a1a; color:#86efac; border-color:#2d6a2d; }
-  .type-docs     { background:#2a2a1a; color:#fde68a; border-color:#6a6a2d; }
-  .type-chore    { background:#1a1a1a; color:#9aa4b2; border-color:#333; }
-  .type-spike    { background:#3a2000; color:#fb923c; border-color:#7a4400; }
-  .pill-spike    { background:#3a2000; color:#fb923c; border-color:#7a4400; font-size:.7rem; }
-
-  /* Risks */
-  .risk-row { display:flex; gap:.75rem; align-items:flex-start; padding:.6rem 0; border-bottom:1px solid var(--border); }
-  .risk-row:last-child { border-bottom:none; }
-  .sev-low    { background:#1a3a1a; color:#4ade80; border-color:#2d6b2d; }
-  .sev-medium { background:#3a2e00; color:#fbbf24; border-color:#6b5200; }
-  .sev-high   { background:#3a1a1a; color:#f87171; border-color:#6b2d2d; }
-  .risk-text { flex:1; font-size:.88rem; line-height:1.5; }
-  .risk-mit  { font-size:.8rem; color:var(--muted); margin-top:.2rem; }
-
-  /* Tabs */
-  .tab-bar { display:flex; gap:.25rem; margin:.75rem 0 0; border-bottom:1px solid var(--border); }
-  .tab { padding:.4rem .9rem; border-radius:6px 6px 0 0; font-size:.85rem; cursor:pointer; color:var(--muted); background:none; border:none; }
-  .tab.active { background:var(--card); color:var(--fg); border:1px solid var(--border); border-bottom-color:var(--card); }
-  .tab-panel { display:none; }
-  .tab-panel.active { display:block; }
-</style>
-
-{% if state %}
-  <!-- ── Status bar ──────────────────────────────────────────────────────── -->
-  <div class="card">
-    <div class="status-bar">
-      <h1 style="margin:0;font-size:1.1rem">Run <code>{{ run_id[:12] }}</code></h1>
-      <span class="pill pill-{{ state.status }}">{{ state.status }}</span>
-      <span class="muted">{{ state.project }} #{{ state.item_id }}</span>
-      <span class="pill">{{ state.intake_mode }}</span>
-      {% if state.status == "running" %}
-        <span class="muted" style="font-size:.85rem">Still running — auto-refreshing…</span>
-      {% endif %}
-    </div>
+<div class="flex items-center justify-between mb-5">
+  <div>
+    <h1 class="text-xl font-semibold">Run <span class="font-mono text-base text-muted">{{ run_id[:12] }}</span></h1>
+    <p class="text-sm text-muted mt-0.5">Live status — updates automatically.</p>
   </div>
+  <a href="/ui/runs" class="text-sm text-accent hover:underline">← All runs</a>
+</div>
 
-  <!-- ── Human review gate ──────────────────────────────────────────────── -->
-  {% if state.get("pending_review") %}
-  <div class="card review-gate">
-    <h2>Spec ready — review before pushing tickets</h2>
-    <p>The PM agent has generated the specification below. Review it, then either <strong>approve</strong>
-       to push the tickets to your connected task tool, or <strong>reject</strong> to cancel the push
-       (the run will still continue through research &amp; coding without pre-created tickets).</p>
-    <div class="review-actions">
-      <button id="btn-approve" class="btn btn-approve" onclick="sendDecision('approve')">Approve &amp; Push Tickets</button>
-      <button id="btn-reject"  class="btn btn-reject"  onclick="sendDecision('reject')">Reject</button>
-    </div>
-    <p id="review-msg" style="display:none;margin-top:.75rem" class="muted"></p>
-  </div>
-  {% endif %}
-
-  <!-- ── Spec view (pretty Markdown-style) ─────────────────────────────── -->
-  {% set pm = state.get("pm", {}) %}
-  {% set spec = pm.get("spec") if pm else none %}
-  {% if spec %}
-  {% set epic = spec.get("epic", {}) %}
-  {% set tech  = spec.get("technical_spec", {}) %}
-  {% set tickets = spec.get("tickets", []) %}
-  {% set risks   = spec.get("risk_assessment", []) %}
-
-  <div class="card">
-    <div class="tab-bar">
-      <button class="tab active" onclick="showTab('overview')">Overview</button>
-      <button class="tab" onclick="showTab('technical')">Technical</button>
-      <button class="tab" onclick="showTab('tickets')">Tickets ({{ tickets|length }})</button>
-      {% if risks %}<button class="tab" onclick="showTab('risks')">Risks ({{ risks|length }})</button>{% endif %}
-    </div>
-
-    <!-- Overview tab -->
-    <div id="tab-overview" class="tab-panel active spec-section">
-      <h2 style="margin:.75rem 0 .25rem">{{ epic.get("title", "Epic") }}</h2>
-      <p>{{ epic.get("summary", "") }}</p>
-      {% if epic.get("business_goal") %}
-      <p style="color:var(--muted);font-style:italic">{{ epic.business_goal }}</p>
-      {% endif %}
-
-      {% if epic.get("acceptance_criteria") %}
-      <h3>Acceptance Criteria</h3>
-      <ul>
-        {% for c in epic.acceptance_criteria %}
-        <li>{{ c }}</li>
-        {% endfor %}
-      </ul>
-      {% endif %}
-
-      {% if epic.get("edge_cases") %}
-      <h3>Edge Cases</h3>
-      <ul>
-        {% for e in epic.edge_cases %}
-        <li>{{ e }}</li>
-        {% endfor %}
-      </ul>
-      {% endif %}
-
-      {% if pm.get("board_ref") %}
-      <p style="margin-top:.75rem;font-size:.82rem" class="muted">
-        Board file: <code>{{ pm.board_ref }}</code>
-      </p>
-      {% endif %}
-      {% if pm.get("ticket_refs") %}
-      <p style="font-size:.82rem" class="muted">
-        Pushed to:
-        {% for ref in pm.ticket_refs %}
-          {% if ref.startswith("http") %}
-            <a href="{{ ref }}" target="_blank">{{ ref }}</a>{% if not loop.last %},{% endif %}
-          {% else %}
-            <code>{{ ref }}</code>{% if not loop.last %},{% endif %}
-          {% endif %}
-        {% endfor %}
-      </p>
-      {% endif %}
-    </div>
-
-    <!-- Technical tab -->
-    <div id="tab-technical" class="tab-panel spec-section">
-      {% if tech.get("approach") %}
-      <h3>Approach</h3>
-      <p>{{ tech.approach }}</p>
-      {% endif %}
-
-      {% if tech.get("affected_areas") %}
-      <h3>Affected Areas</h3>
-      <div class="chips">
-        {% for a in tech.affected_areas %}<span class="chip">{{ a }}</span>{% endfor %}
-      </div>
-      {% endif %}
-
-      {% if tech.get("data_model_changes") %}
-      <h3>Data Model Changes</h3>
-      <ul>{% for d in tech.data_model_changes %}<li>{{ d }}</li>{% endfor %}</ul>
-      {% endif %}
-
-      {% if tech.get("api_changes") %}
-      <h3>API Changes</h3>
-      <ul>{% for a in tech.api_changes %}<li>{{ a }}</li>{% endfor %}</ul>
-      {% endif %}
-
-      {% if tech.get("testing_strategy") %}
-      <h3>Testing Strategy</h3>
-      <p>{{ tech.testing_strategy }}</p>
-      {% endif %}
-    </div>
-
-    <!-- Tickets tab -->
-    <div id="tab-tickets" class="tab-panel spec-section">
-      {% if tickets %}
-      <div class="tickets-grid">
-        {% for t in tickets %}
-        <div class="ticket-card">
-          <div class="ticket-meta">
-            <span class="ticket-id">{{ t.get("id","") }}</span>
-            <span class="pill type-{{ t.get('type','chore') }}">{{ t.get("type","") }}</span>
-            {% if t.get("needs_research") %}<span class="pill pill-spike">SPIKE</span>{% endif %}
-            {% if t.get("estimate") %}<span class="pill" style="font-size:.7rem">{{ t.estimate }}</span>{% endif %}
-          </div>
-          <div class="ticket-title">{{ t.get("title","") }}</div>
-          <div class="ticket-desc">{{ t.get("description","") }}</div>
-          {% if t.get("acceptance_criteria") %}
-          <ul style="margin:.5rem 0;padding-left:1.1rem;font-size:.8rem;color:var(--muted)">
-            {% for c in t.acceptance_criteria %}<li>{{ c }}</li>{% endfor %}
-          </ul>
-          {% endif %}
-          {% if t.get("dependencies") %}
-          <div class="ticket-footer">
-            <span>Deps: {{ t.dependencies | join(", ") }}</span>
-          </div>
-          {% endif %}
-        </div>
-        {% endfor %}
-      </div>
-      {% else %}
-      <p class="muted">No tickets yet.</p>
-      {% endif %}
-    </div>
-
-    <!-- Risks tab -->
-    {% if risks %}
-    <div id="tab-risks" class="tab-panel spec-section">
-      {% for r in risks %}
-      <div class="risk-row">
-        <span class="pill sev-{{ r.get('severity','low') }}" style="white-space:nowrap">{{ r.get("severity","") }}</span>
-        <div class="risk-text">
-          {{ r.get("description","") }}
-          <div class="risk-mit">Mitigation: {{ r.get("mitigation","") }}</div>
-        </div>
-      </div>
-      {% endfor %}
-    </div>
-    {% endif %}
-  </div>
-  {% endif %}
-
-  <!-- ── Per-agent status ───────────────────────────────────────────────── -->
-  <div class="card">
-    <h2>Agent status</h2>
-    {% for ns in ["intake", "pm", "research", "coding", "reviewer", "fixer"] %}
-      {% set sub = state.get(ns, {}) %}
-      <p><strong>{{ ns }}</strong>:
-        {% if sub.get("error") %}<span class="pill pill-failed">error</span> {{ sub.error }}
-        {% elif sub.get("note") %}{{ sub.note }}
-        {% else %}<span class="muted">—</span>{% endif %}
-        {% if sub.get("pr_url") %} · <a href="{{ sub.pr_url }}" target="_blank">PR</a>{% endif %}
-        {% if sub.get("board_ref") %} · board: <code>{{ sub.board_ref }}</code>{% endif %}
-      </p>
-    {% endfor %}
-  </div>
-
-  <!-- ── Raw JSON toggle ────────────────────────────────────────────────── -->
-  <details class="card"><summary class="muted">Raw state JSON</summary>
-    <pre>{{ state | tojson(indent=2) }}</pre>
-  </details>
-
-{% else %}
-  <div class="card"><p class="muted">No state yet (the run may still be starting). <a href="">Refresh</a>.</p></div>
-{% endif %}
-
+{# Preserve <details> open/closed state across SSE swaps — htmx replaces innerHTML which resets
+   the DOM, so we capture open details before the swap and restore them after. #}
 <script>
-  // Tab switcher
-  function showTab(name) {
-    document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
-    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-    const panel = document.getElementById('tab-' + name);
-    if (panel) panel.classList.add('active');
-    event.target.classList.add('active');
-  }
-
-  // Approve / Reject
-  function sendDecision(decision) {
-    const approveBtn = document.getElementById('btn-approve');
-    const rejectBtn  = document.getElementById('btn-reject');
-    const msg        = document.getElementById('review-msg');
-    if (approveBtn) approveBtn.disabled = true;
-    if (rejectBtn)  rejectBtn.disabled  = true;
-    if (msg) { msg.style.display = 'block'; msg.textContent = decision === 'approve' ? 'Pushing tickets…' : 'Cancelling…'; }
-
-    fetch('/runs/{{ run_id }}/resume', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({decision: decision})
-    })
-    .then(r => r.ok ? r.json() : Promise.reject(r.statusText))
-    .then(() => { window.location.reload(); })
-    .catch(err => {
-      if (approveBtn) approveBtn.disabled = false;
-      if (rejectBtn)  rejectBtn.disabled  = false;
-      if (msg) msg.textContent = 'Error: ' + err;
+  (function() {
+    const TIMELINE = '#run-timeline';
+    let openDetails = new Set();
+    document.addEventListener('htmx:beforeSwap', function(e) {
+      if (e.target && e.target.id === 'run-timeline') {
+        openDetails = new Set();
+        e.target.querySelectorAll('details[open]').forEach(function(d) {
+          openDetails.add(d.querySelector('summary')?.textContent?.trim() || d.dataset.key);
+        });
+      }
     });
-  }
-
-  // Auto-refresh while the run is actively executing (not when waiting for human input)
-  {% if state and state.status == "running" %}
-  setTimeout(() => window.location.reload(), 3000);
-  {% endif %}
+    document.addEventListener('htmx:afterSwap', function(e) {
+      if (e.target && e.target.id === 'run-timeline' && openDetails.size) {
+        e.target.querySelectorAll('details').forEach(function(d) {
+          const key = d.querySelector('summary')?.textContent?.trim() || d.dataset.key;
+          if (openDetails.has(key)) d.setAttribute('open', '');
+        });
+      }
+    });
+  })();
 </script>
+
+{# The timeline streams over SSE; htmx swaps the rendered partial in on each tick and closes
+   the stream on the `done` event. Initial server render keeps first paint useful without JS. #}
+<div id="run-timeline"
+     hx-ext="sse"
+     sse-connect="/ui/runs/{{ run_id }}/events"
+     sse-swap="message"
+     sse-close="done">
+  {% include "_run_timeline.html" %}
+</div>
+
 {% endblock %}

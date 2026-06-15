@@ -39,6 +39,7 @@ services:
       # override the default DSNs to reach compose services by name
       POSTGRES_DSN: postgresql://ash:ash@postgres:5432/ash
       CHROMA_HOST: chroma
+      CHROMA_PORT: 8000   # internal container port; .env has 8001 (host-mapped port)
     depends_on:
       postgres:
         condition: service_healthy
@@ -47,7 +48,21 @@ services:
     volumes:
       # bind-mount the whole project so runtime/ (board specs, state, worktrees) is visible on the host
       - .:/app
+      # ── Local repo mounts ──────────────────────────────────────────────────────────────────────────
+      # Paths in projects/*.yaml (work.local_repo_path) must resolve *inside* the container.
+      # Mount them at the same absolute path so the YAML values work unchanged.
+      #
+      # Option A — single repo (LOCAL_REPO_PATH=/absolute/path/to/your/clone)
+      - ${LOCAL_REPO_PATH:-/tmp}:${LOCAL_REPO_PATH:-/tmp}
+      # Option B — multiple projects (LOCAL_REPOS_ROOT=/absolute/parent/of/all/clones)
+      #   e.g. LOCAL_REPOS_ROOT=/Users/you/dev  when clones live at /Users/you/dev/plane,
+      #   /Users/you/dev/edx/edx-platform, etc.  Both options can coexist; set whichever applies.
+      - ${LOCAL_REPOS_ROOT:-/tmp}:${LOCAL_REPOS_ROOT:-/tmp}
+      # Chroma's default embedding function (ONNX all-MiniLM-L6-v2) runs CLIENT-side — i.e. in
+      # THIS container, not the chroma server. Persist its model cache so it's downloaded once.
+      - chroma-onnx:/root/.cache/chroma
 
 volumes:
   ash-postgres:
   ash-chroma:
+  chroma-onnx:

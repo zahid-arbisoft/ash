@@ -21,6 +21,7 @@ from ash.agents.spec_validator import validate_spec
 from ash.clients.board import get_board
 from ash.config.settings import load_project
 from ash.db.base import get_sessionmaker
+from ash.db.runs import persist_spec_record, update_spec_ticket_refs
 from ash.documents import read_documents
 from ash.graph.state import WorkflowState
 from ash.schemas import Spec
@@ -59,6 +60,22 @@ is involved.
 
 Before finishing, self-check the spec against all six rules. Verify open_questions is populated \
 for any undecided technology, undefined external interface, or named unknown in the requirements.\
+"""
+
+# ── story mode: single (default) vs multiple (decision #26 / F1) ──
+
+_STORY_MODE_SINGLE = """\
+
+STORY MODE — SINGLE (important): the client wants this delivered as ONE story/ticket. Produce \
+exactly ONE implementation ticket that covers the whole ask end-to-end (you MAY additionally add a \
+single SPIKE ticket if investigation is genuinely required first). Do NOT split the work into \
+multiple parallel implementation tickets. Keep the epic and technical spec as usual.\
+"""
+
+_STORY_MODE_MULTIPLE = """\
+
+STORY MODE — MULTIPLE: break the work into several small, independently shippable implementation \
+tickets (stories), each delivered as its own PR. Use dependencies to express ordering.\
 """
 
 # ── raw_to_spec: PM builds a full spec + breaks it into implementation tickets ──
@@ -151,6 +168,7 @@ class PMAgent(BaseAgent):
     name = "pm"
 
     async def run(self, state: WorkflowState) -> dict[str, Any]:
+        self._reset_usage()
         project = load_project(state.project)
 
         context = await self._gather(state)
@@ -162,6 +180,7 @@ class PMAgent(BaseAgent):
         else:  # raw_to_spec (raw_to_dev never reaches PM)
             system, user = _SYSTEM_RAW_TO_SPEC, _USER_RAW_TO_SPEC
         system += _QUALITY_RULES
+        system += _STORY_MODE_SINGLE if state.story_mode == "single" else _STORY_MODE_MULTIPLE
 
         spec = await self.generate(Spec, system=system, user=user.format(context=context))
         spec = await self._validate_and_repair(spec, system=system, context=context)
@@ -169,6 +188,19 @@ class PMAgent(BaseAgent):
         item_id = state.item_id or "upload"
         board = get_board(project.runtime_dir / "board")
         board_ref = await asyncio.to_thread(board.publish_spec, item_id, state.issue_url, spec)
+
+        # Persist the spec for the searchable PM-runs view (best-effort — never fail the run).
+        try:
+            await persist_spec_record(
+                run_id=state.run_id,
+                project=state.project,
+                item_id=item_id,
+                intake_mode=state.intake_mode,
+                spec=spec,
+                board_ref=board_ref,
+            )
+        except Exception:  # noqa: BLE001 — persistence is best-effort
+            pass
 
         spikes = [t.id for t in spec.tickets if t.needs_research]
         mode_label = "Spec extracted" if state.intake_mode == "spec_ready" else "Spec generated"
@@ -181,6 +213,7 @@ class PMAgent(BaseAgent):
                 "spec": spec,
                 "board_ref": board_ref,
                 "note": note,
+                "tokens": dict(self._usage),
             }
         }
 
@@ -232,9 +265,19 @@ class PMPublishAgent(BaseAgent):
 
         # Pause — LangGraph checkpoints here; the UI shows Approve / Reject.
         # `interrupt()` returns the value passed to Command(resume=...) on the resume call.
-        decision: str = interrupt("spec_review")
+        # The decision is either a plain string ("approve"/"reject") or a dict carrying the
+        # human's per-story selection (decision #26 / §4.2): {"action": "approve",
+        # "stories": ["T1", "T3"]} — only those tickets become stories.
+        raw_decision: Any = interrupt("spec_review")
+        if isinstance(raw_decision, dict):
+            action = str(raw_decision.get("action", "approve"))
+            selection = raw_decision.get("stories")
+            story_selection = [str(s) for s in selection] if isinstance(selection, list) else None
+        else:
+            action = str(raw_decision)
+            story_selection = None
 
-        if decision == "reject":
+        if action == "reject":
             return {
                 "pm": {
                     "spec": spec,
@@ -255,6 +298,10 @@ class PMPublishAgent(BaseAgent):
             refs = await sink.publish(spec)
             note = f"{len(refs)} ticket(s) pushed"
             ticket_refs = [r.url or r.id for r in refs]
+            try:
+                await update_spec_ticket_refs(state.run_id, ticket_refs)
+            except Exception:  # noqa: BLE001 — persistence is best-effort
+                pass
         except Exception as exc:  # noqa: BLE001 — keep spec; report push failure
             note = f"spec approved, but ticket push failed: {type(exc).__name__}: {exc}"
             ticket_refs = []
@@ -266,6 +313,8 @@ class PMPublishAgent(BaseAgent):
                 "spec": spec,
                 "board_ref": state.pm.board_ref,
                 "ticket_refs": ticket_refs,
+                "story_selection": story_selection,
                 "note": note,
+                "tokens": dict(self._usage),
             }
         }

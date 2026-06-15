@@ -15,6 +15,8 @@ class RunRequest(BaseModel):
     integration_id: int | None = None
     attachments: list[str] = []  # paths returned by POST /uploads
     task_sink_id: int | None = None  # where PM pushes tickets (None → default → file board)
+    ticket_id: str = ""  # scope the build to one spec ticket (legacy single-ticket runs)
+    story_mode: str = "single"  # PM produces one story (default) or many (decision #26)
 
 
 class RunAccepted(BaseModel):

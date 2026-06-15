@@ -1,0 +1,116 @@
+{% extends "base.html" %}
+{% block title %}Agents{% endblock %}
+{% block breadcrumb %}Agents{% endblock %}
+{% block body %}
+
+{% set roles = {
+  "pm": "Generates specs & tickets from requirements",
+  "research": "Investigates spikes; produces implementation plans",
+  "coding": "Implements tickets; commits and opens PRs",
+  "reviewer": "Reviews PRs in one pass; tags findings by severity",
+  "fixer": "Addresses review feedback; updates the PR",
+  "rfc": "Drafts RFCs before planning",
+} %}
+
+<div class="flex items-center justify-between mb-5">
+  <div>
+    <h1 class="text-xl font-semibold">Agents</h1>
+    <p class="text-sm text-muted mt-0.5">Your software-house staff. Trigger &amp; HITL are set per project.</p>
+  </div>
+  {% if projects %}
+  <form method="get" action="/ui/agents">
+    <select name="project" onchange="this.form.submit()"
+            class="!w-auto bg-surface border border-border rounded-lg px-3 h-9 text-sm">
+      {% for p in projects %}<option value="{{ p }}" {{ "selected" if p == selected }}>{{ p }}</option>{% endfor %}
+    </select>
+  </form>
+  {% endif %}
+</div>
+
+{% if not agents %}
+<div class="bg-surface border border-border rounded-xl px-5 py-12 text-center text-muted text-sm">
+  No project selected, or no project configs found in <span class="font-mono">projects/</span>.
+</div>
+{% else %}
+<div class="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
+  {% for a in agents %}
+  <div class="bg-surface border border-border rounded-xl p-5 {{ '' if a.built else 'opacity-60' }}">
+    <div class="flex items-center justify-between mb-1">
+      <h2 class="font-semibold capitalize text-fg">{{ a.name }}</h2>
+      <div class="flex items-center gap-1.5">
+        {% if a.pending_count %}
+        <span class="text-[10px] px-2 py-0.5 rounded-full bg-warn/20 text-warn font-semibold">{{ a.pending_count }} pending</span>
+        {% endif %}
+        {% if a.in_progress_count %}
+        <span class="text-[10px] px-2 py-0.5 rounded-full bg-accent/15 text-accent">{{ a.in_progress_count }} running</span>
+        {% endif %}
+        {% if a.built %}
+          <span class="text-[10px] px-2 py-0.5 rounded-full bg-ok/15 text-ok">active</span>
+        {% else %}
+          <span class="text-[10px] px-2 py-0.5 rounded-full bg-border text-muted">not built</span>
+        {% endif %}
+      </div>
+    </div>
+    <p class="text-sm text-muted mb-4 min-h-[2.5rem]">{{ roles.get(a.name, "") }}</p>
+
+    {% if a.built %}
+    <dl class="space-y-2 text-sm">
+      <div class="flex items-center justify-between">
+        <dt class="text-muted">Trigger</dt>
+        <dd>
+          {% set tt = "bg-accent/15 text-accent" if a.trigger == "auto" else "bg-border text-muted" %}
+          <span class="text-xs px-2 py-0.5 rounded-full {{ tt }}">{{ a.trigger }}</span>
+        </dd>
+      </div>
+      <div class="flex items-center justify-between">
+        <dt class="text-muted">Enabled</dt>
+        <dd><span class="w-2 h-2 inline-block rounded-full {{ 'bg-ok' if a.enabled else 'bg-muted/40' }}"></span></dd>
+      </div>
+      {% if a.hitl is not none %}
+      <div class="flex items-center justify-between">
+        <dt class="text-muted">Merge gate</dt>
+        <dd><span class="text-xs px-2 py-0.5 rounded-full bg-border text-muted">{{ "human" if a.hitl else "auto" }}</span></dd>
+      </div>
+      {% endif %}
+      <div class="flex items-center justify-between">
+        <dt class="text-muted">Model</dt>
+        <dd class="font-mono text-xs text-muted">{{ a.model }}</dd>
+      </div>
+    </dl>
+    {# Analytics (F8): tokens + time across runs for this agent. #}
+    {% set m = a.metrics or {} %}
+    {% if m.runs %}
+    <div class="mt-3 pt-3 border-t border-border/60 grid grid-cols-3 gap-2 text-center">
+      <div>
+        <div class="font-mono text-sm text-fg tabular-nums">{{ "{:,}".format(m.total_tokens or 0) }}</div>
+        <div class="text-[10px] uppercase tracking-wide text-muted/60">tokens</div>
+      </div>
+      <div>
+        <div class="font-mono text-sm text-fg tabular-nums">{{ "%.1f"|format((m.duration_ms or 0)/1000) }}s</div>
+        <div class="text-[10px] uppercase tracking-wide text-muted/60">time</div>
+      </div>
+      <div>
+        <div class="font-mono text-sm text-fg tabular-nums">{{ "{:,}".format(m.avg_tokens or 0) }}</div>
+        <div class="text-[10px] uppercase tracking-wide text-muted/60">avg/run</div>
+      </div>
+    </div>
+    {% endif %}
+    <div class="mt-4 pt-3 border-t border-border/60 flex items-center justify-between">
+      <a href="/ui/agents/{{ a.name }}?project={{ selected }}" class="text-sm text-accent hover:underline">View tasks →</a>
+      <a href="/ui/runs/new" class="text-xs text-muted hover:underline">Start run</a>
+    </div>
+    {% else %}
+    <p class="text-xs text-muted/70 italic">Placeholder — this agent is on the roadmap (plan §10.6).</p>
+    {% endif %}
+  </div>
+  {% endfor %}
+</div>
+
+<p class="mt-5 text-xs text-muted/70">
+  Trigger mode (<span class="font-mono">auto</span>/<span class="font-mono">manual</span>) and the merge gate are
+  configured per project in <span class="font-mono">projects/{{ selected }}.yaml</span> under
+  <span class="font-mono">agents:</span> and <span class="font-mono">autonomy:</span>.
+</p>
+{% endif %}
+
+{% endblock %}

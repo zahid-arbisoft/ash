@@ -30,6 +30,14 @@ client/target #1; SaaS packaging is a later layer that must not change the agent
 4. **Repo topology is per-project**: `fork` / `single` / `closed-source(private)`.
 5. **Sequencing discipline:** do NOT build triggers/sinks/UI until the core loop (Phases 0–3) is
    trustworthy. Keep human verification gates until the layer below has earned removal.
+6. **LangChain/LangGraph-first — religiously.** Prefer maintained LangChain ecosystem primitives over
+   hand-rolled code, and model **all orchestration/control-flow with LangGraph**: graph state +
+   reducers, nodes, conditional edges, subgraphs, `Send`/map-reduce, and **checkpointer-based
+   interrupts/resume** — not bespoke loops, queues, or `if/while` flow in Python. When a requirement
+   doesn't fit the current graph shape, **restructure the graph** rather than bolting control flow on
+   the side. Canonical example: per-story fan-out is a `stories[ticket_id]` reducer + a
+   `story_router`→`story_build` subgraph loop (decision #26 /
+   `docs/plan/per_story_fanout_and_oversight_plan.md`), not a Python for-loop over tickets.
 
 ## Environment notes
 - LLM is provider-agnostic via a **LangChain** factory. For a **LiteLLM gateway** (`/v1`) use
@@ -76,5 +84,48 @@ client/target #1; SaaS packaging is a later layer that must not change the agent
   agents + verify vs a real hosted server; P4 middleware activation; P5/P6. `deepagents` deferred.
 - Verified: ruff clean, **mypy --strict clean (65 files)**, **69 pytest tests green**. Live
   Postgres/LLM/Jira/Plane runs pending real `.env` credentials.
-- **Open follow-ups:** the create_agent/MCP/HITL phase above; Alembic migrations (tables are
-  `create_all`); real Reviewer (maker/checker) + bounded Fixer; deepen code grounding.
+- **Reviewer + Fixer + Jira-style UI (2026-06-15, decisions #22/#23):** Reviewer (deep one-pass
+  `CodeReview`, severity tags, policy-gated auto-merge) and Fixer (bounded fix loop) are real now,
+  not stubs. New `SpecRecord` persistence + `RunRecord.status`/`task_sink_id`; per-agent `trigger`
+  config (`agents:` map). UI rebuilt on Tailwind+HTMX+Alpine (sidebar shell, SSE run detail,
+  Approvals, searchable PM runs, Agents view). Roadmap/status in
+  `docs/plan/agent_runtime_and_connectors_plan.md` §10–§13.
+- **A1 / P2 — Dev agent loop (2026-06-16):** `CodingAgent` now runs a bounded `create_agent` tool
+  loop (`DevToolkit`: read_file, list_files, search_code, run_command), detects test command /
+  commit convention / PR template, outer test-fix loop up to `MAX_CODE_ITERATIONS=3`. New
+  `src/ash/toolkits/dev.py`. Light/dark theme toggle added to all UI pages (CSS custom properties,
+  FOUC-prevention script, Alpine.js toggle in topbar).
+- **Roadmap complete (2026-06-16):** All remaining items from
+  `docs/plan/agent_runtime_and_connectors_plan.md §13` are now shipped:
+  - **A4 dispatch** — `AgentPolicy.trigger` default changed to `"auto"`; `_trigger_gate()` on
+    `BaseAgent` calls `interrupt()` when `trigger="manual"`; `POST /ui/runs/{id}/trigger` resumes
+    with `"run"`. Research/Coding/Reviewer/Fixer all gate on their trigger policy.
+  - **P4b** — Reviewer interrupts for merge approval when `auto_merge_on_approve=True` AND
+    `require_human_for_merge=True`; `/ui/runs/{id}/approve` resumes with `"approve"` → merge.
+  - **C1 rest** — per-kind discriminated config schemas (`GitHubConnectorConfig`,
+    `JiraConnectorConfig`, `PlaneConnectorConfig`, `MCPHTTPConnectorConfig`, `FileConnectorConfig`);
+    `GET /ui/connectors/{id}/health` + HTMX health-dot fragment; Alpine multi-step add-connector
+    wizard in `connectors.html`; `POST /ui/connectors` create endpoint; `mcp_tools_for_url`.
+  - **RFC agent** — real `RFCAgent` + `RFCDocument` schema with `to_markdown()`; opt-in via
+    `agents.rfc.trigger: auto`; `RFCState` in `WorkflowState`; `rfc` node in graph between
+    `pm_publish` and `research`; `agent_rfc` override in `Settings`.
+- **Current state:** 140 pytest tests, ruff + mypy --strict clean (71 source files). Live
+  Postgres/LLM/Jira/Plane runs pending real `.env` credentials.
+- **Open follow-ups:** Alembic migrations (stopgap `ADD COLUMN IF NOT EXISTS` backfills still
+  in `db/base.py:_PG_COLUMN_BACKFILLS`); bind connector MCP tools into live agents (A1 note);
+  A5 research sinks; deepen code grounding.
+- **IMPLEMENTED (2026-06-17, decision #26) — per-story fan-out & oversight (F0–F8):** the **story is
+  the unit of execution** inside one run — `WorkflowState.stories[ticket_id]` (reducer-merged) driven
+  by a sequential `story_router`→`story_build` subgraph loop (`graph/builder.py` + `graph/stories.py`
+  + node-adapter story scoping in `graph/nodes.py`). One **PR per story, built one by one**, in
+  dependency order; **per-story retry** (resume at the failed story) + **manual regenerate**
+  (`/ui/runs/{id}/stories/{ticket}/rerun`) via `Runner.retry_run(ticket_id, from_step)`; **no
+  duplicate PRs** (deterministic per-ticket branch + persisted `branch`/`pr_url`, Coding updates the
+  existing PR). PM **single (default)/multiple** `story_mode` + post-PM story selection at the review
+  gate. **Context-min (F7):** Chroma indexes line-ranged chunks (not whole files) + `read_file(path,
+  start, end)`. **Analytics (F8):** `AgentRunMetric` (tokens in/out + time + model per agent/story) →
+  run-detail totals + per-story chips, Agents rollups, Dashboard KPIs. **RFC (F6):** one per run +
+  Markdown preview + collapse fix. New DB: `StoryRecord`, `AgentRunMetric`, `AgentTask.ticket_id`,
+  `RunRecord.story_mode` (PG backfills). Structured outputs stay LangChain-native (Instructor
+  fallback only). **166 pytest green, ruff + mypy --strict clean (77 files).** Design + file map:
+  **`docs/plan/per_story_fanout_and_oversight_plan.md`**.

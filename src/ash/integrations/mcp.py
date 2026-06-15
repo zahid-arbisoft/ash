@@ -40,3 +40,18 @@ async def load_mcp_tools(connector: Connector) -> list[BaseTool]:
     connections = cast(Any, {connector.name: server_config(connector)})
     client = MultiServerMCPClient(connections)
     return await client.get_tools()
+
+
+async def mcp_tools_for_url(base_url: str, secret: str = "") -> list[BaseTool]:
+    """Connect to an MCP server by URL directly (no DB record needed — used in wizard preview)."""
+    from langchain_mcp_adapters.client import MultiServerMCPClient
+
+    headers: dict[str, str] = {}
+    if secret:
+        headers["Authorization"] = f"Bearer {secret}"
+    connections = cast(
+        Any,
+        {"_preview": {"transport": "streamable_http", "url": base_url, "headers": headers}},
+    )
+    client = MultiServerMCPClient(connections)
+    return await client.get_tools()

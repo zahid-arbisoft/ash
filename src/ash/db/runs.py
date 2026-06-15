@@ -1,0 +1,101 @@
+"""Run/spec persistence helpers (plan §10.1, A0).
+
+These keep a denormalized copy of run status and the generated spec in the app DB so the UI can
+list and search PM runs without replaying the LangGraph checkpointer (which stays the source of
+truth for live state). All writers are **best-effort**: callers wrap them so a DB hiccup never
+fails an agent run.
+"""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+from sqlalchemy import or_, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from ash.db.base import get_sessionmaker
+from ash.db.models import RunRecord, SpecRecord
+
+if TYPE_CHECKING:
+    from ash.schemas import Spec
+
+
+async def persist_spec_record(
+    *,
+    run_id: str,
+    project: str,
+    item_id: str,
+    intake_mode: str,
+    spec: Spec,
+    board_ref: str | None = None,
+    ticket_refs: list[str] | None = None,
+) -> None:
+    """Upsert the spec for a run (one SpecRecord per run_id)."""
+    spikes = sum(1 for t in spec.tickets if t.needs_research)
+    async with get_sessionmaker()() as session:
+        rec = await session.get(SpecRecord, run_id)
+        if rec is None:
+            rec = SpecRecord(run_id=run_id)
+            session.add(rec)
+        rec.project = project
+        rec.item_id = item_id
+        rec.intake_mode = intake_mode
+        rec.epic_title = spec.epic.title[:500]
+        rec.summary = spec.epic.summary
+        rec.ticket_count = len(spec.tickets)
+        rec.spike_count = spikes
+        rec.spec_json = spec.model_dump(mode="json")
+        rec.board_ref = board_ref
+        if ticket_refs is not None:
+            rec.ticket_refs = ticket_refs
+        await session.commit()
+
+
+async def update_spec_ticket_refs(run_id: str, ticket_refs: list[str]) -> None:
+    """Record where a run's tickets were pushed, after the publish gate."""
+    async with get_sessionmaker()() as session:
+        rec = await session.get(SpecRecord, run_id)
+        if rec is not None:
+            rec.ticket_refs = ticket_refs
+            await session.commit()
+
+
+async def update_run_status(run_id: str, status: str) -> None:
+    """Best-effort denormalized status copy on the RunRecord (badge in the runs list)."""
+    async with get_sessionmaker()() as session:
+        rec = await session.get(RunRecord, run_id)
+        if rec is not None:
+            rec.status = status
+            await session.commit()
+
+
+async def search_spec_records(
+    session: AsyncSession,
+    *,
+    query: str = "",
+    project: str = "",
+    page: int = 1,
+    per_page: int = 20,
+) -> tuple[list[SpecRecord], int]:
+    """Paginated, text-searchable PM-runs listing (epic title / summary / item id)."""
+    from sqlalchemy import func
+
+    stmt = select(SpecRecord).order_by(SpecRecord.created_at.desc())
+    if project:
+        stmt = stmt.where(SpecRecord.project == project)
+    if query:
+        like = f"%{query}%"
+        stmt = stmt.where(
+            or_(
+                SpecRecord.epic_title.ilike(like),
+                SpecRecord.summary.ilike(like),
+                SpecRecord.item_id.ilike(like),
+            )
+        )
+    total: int = (
+        await session.execute(select(func.count()).select_from(stmt.subquery()))
+    ).scalar_one()
+    rows = list(
+        (await session.execute(stmt.limit(per_page).offset((page - 1) * per_page))).scalars().all()
+    )
+    return rows, total

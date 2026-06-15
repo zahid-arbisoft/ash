@@ -1,0 +1,35 @@
+name: edx-platform
+
+# Read-only: where issues are discovered (we don't own this repo).
+issues:
+  source_repo: openedx/openedx-platform
+  filters:
+    state: open
+    # labels: ["\U0001F41B bug"]   # optional: narrow triage later
+
+# Write target: all branches/commits/PRs/merges happen here (the fork).
+work:
+  target_repo: zahid-arbisoft/openedx-platform
+  base_branch: master
+  mode: fork                        # fork | single (see plan §7a)
+  upstream_remote: zahid-arbisoft/openedx-platform
+  open_upstream_prs: false          # do not contribute upstream while building/testing
+  # Path to your existing local clone of zahid-arbisoft/plane.
+  # Leave blank to set it via LOCAL_REPO_PATH in .env instead.
+  local_repo_path: "/Users/zahid.ali/Documents/python/oss/edx/edx-platform"
+
+# Human-in-the-loop, toggleable (plan §7b). Flip to false for unattended runs.
+autonomy:
+  require_human_for_merge: true
+  require_human_for_escalation: true
+
+# Soft cost caps; loop pauses + logs on breach (enforced in Phase 4).
+budget:
+  per_ticket_usd: 2.0
+  per_day_usd: 20.0
+
+# Heartbeat cadence (used in Phase 4).
+schedule:
+  cron: "0 9 * * *"
+
+skills:

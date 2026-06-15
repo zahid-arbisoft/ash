@@ -1,44 +1,243 @@
 <!doctype html>
-<html lang="en">
+<!-- FOUC prevention: apply saved theme before first paint, before Alpine initialises -->
+<script>
+  (function(){var t=localStorage.getItem('theme');
+  if(t!=='light')document.documentElement.classList.add('dark');})();
+</script>
+<html x-data="{ darkMode: localStorage.getItem('theme') !== 'light' }"
+      :class="{ dark: darkMode }" lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}ASH{% endblock %} · Agentic Software House</title>
+
+  <!-- Design-token CSS variables (light = :root, dark = .dark) ─────────────── -->
   <style>
-    :root { --bg:#0f1115; --card:#171a21; --fg:#e6e6e6; --muted:#9aa4b2; --accent:#6ea8fe; --border:#262b35; }
-    * { box-sizing: border-box; }
-    body { margin:0; font:15px/1.5 system-ui,sans-serif; background:var(--bg); color:var(--fg); }
-    header { display:flex; gap:1.5rem; align-items:center; padding:1rem 1.5rem; border-bottom:1px solid var(--border); }
-    header a { color:var(--fg); text-decoration:none; }
-    header .brand { font-weight:700; }
-    header nav a { color:var(--muted); margin-left:1rem; }
-    header nav a:hover { color:var(--accent); }
-    main { max-width:960px; margin:0 auto; padding:1.5rem; }
-    h1 { font-size:1.4rem; } h2 { font-size:1.1rem; color:var(--muted); }
-    .card { background:var(--card); border:1px solid var(--border); border-radius:10px; padding:1rem 1.25rem; margin:1rem 0; }
-    table { width:100%; border-collapse:collapse; }
-    th,td { text-align:left; padding:.5rem .6rem; border-bottom:1px solid var(--border); }
-    th { color:var(--muted); font-weight:600; }
-    .btn { display:inline-block; background:var(--accent); color:#0b0d10; padding:.5rem .9rem; border-radius:8px; text-decoration:none; font-weight:600; border:none; cursor:pointer; }
-    label { display:block; margin:.8rem 0 .25rem; color:var(--muted); }
-    input,select { width:100%; padding:.5rem; background:#0f1218; color:var(--fg); border:1px solid var(--border); border-radius:8px; }
-    .pill { font-size:.8rem; padding:.1rem .5rem; border-radius:999px; border:1px solid var(--border); color:var(--muted); }
-    code,pre { background:#0b0d10; border-radius:6px; }
-    pre { padding:1rem; overflow:auto; }
-    .muted { color:var(--muted); }
+    :root {
+      /* Light theme */
+      --color-bg:      243 244 246;
+      --color-surface: 255 255 255;
+      --color-elevate: 233 236 240;
+      --color-fg:      15  23  42;
+      --color-muted:   51  65  85;
+      --color-accent:  29  78  216;
+      --color-border:  209 213 219;
+      --color-ok:      15  118 110;
+      --color-warn:    180 83  9;
+      --color-danger:  185 28  28;
+    }
+    .dark {
+      /* Dark theme */
+      --color-bg:      15  17  21;
+      --color-surface: 23  26  33;
+      --color-elevate: 29  33  43;
+      --color-fg:      230 230 230;
+      --color-muted:   154 164 178;
+      --color-accent:  110 168 254;
+      --color-border:  38  43  53;
+      --color-ok:      74  222 128;
+      --color-warn:    251 191 36;
+      --color-danger:  248 113 113;
+    }
+    /* Legacy shim — keeps un-ported child templates looking correct until fully ported.
+       Remove once every page uses Tailwind utilities only. */
+    .card { background:rgb(var(--color-surface)); border:1px solid rgb(var(--color-border));
+            border-radius:10px; padding:1rem 1.25rem; margin:1rem 0; }
+    .card table { width:100%; border-collapse:collapse; }
+    .card th,.card td { text-align:left; padding:.5rem .6rem;
+                        border-bottom:1px solid rgb(var(--color-border)); }
+    .card th { color:rgb(var(--color-muted)); font-weight:600; }
+    .btn { display:inline-block; background:rgb(var(--color-accent)); color:rgb(var(--color-bg));
+           padding:.5rem .9rem; border-radius:8px; text-decoration:none;
+           font-weight:600; border:none; cursor:pointer; }
+    label { display:block; margin:.8rem 0 .25rem; color:rgb(var(--color-muted)); }
+    input,select,textarea { width:100%; padding:.5rem; background:rgb(var(--color-bg));
+                            color:rgb(var(--color-fg));
+                            border:1px solid rgb(var(--color-border)); border-radius:8px; }
+    /* Checkboxes/radios must NOT inherit the full-width text-input shim above — keep them
+       intrinsic size + native styling so labels align (decision #26 UI fix). */
+    input[type=checkbox],input[type=radio] { width:auto; padding:0; margin:0; border-radius:0;
+                            background:none; vertical-align:middle; accent-color:rgb(var(--color-accent)); }
+    h1 { font-size:1.4rem; } h2 { font-size:1.1rem; color:rgb(var(--color-muted)); }
+    .pill { display:inline-block; font-size:.8rem; padding:.1rem .5rem; border-radius:999px;
+            border:1px solid rgb(var(--color-border)); color:rgb(var(--color-muted)); }
+    .muted { color:rgb(var(--color-muted)); }
+    pre { background:rgb(var(--color-elevate)); border-radius:6px; padding:1rem; overflow:auto; }
+    code { background:rgb(var(--color-elevate)); border-radius:6px; }
+    [x-cloak]{ display:none!important; }
   </style>
+
+  <!-- Tailwind (Play CDN — colours driven by CSS vars so dark/light toggle works with opacity) -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: "class",
+      theme: {
+        extend: {
+          colors: {
+            bg:      "rgb(var(--color-bg)      / <alpha-value>)",
+            surface: "rgb(var(--color-surface) / <alpha-value>)",
+            elevate: "rgb(var(--color-elevate) / <alpha-value>)",
+            fg:      "rgb(var(--color-fg)      / <alpha-value>)",
+            muted:   "rgb(var(--color-muted)   / <alpha-value>)",
+            accent:  "rgb(var(--color-accent)  / <alpha-value>)",
+            border:  "rgb(var(--color-border)  / <alpha-value>)",
+            ok:      "rgb(var(--color-ok)      / <alpha-value>)",
+            warn:    "rgb(var(--color-warn)     / <alpha-value>)",
+            danger:  "rgb(var(--color-danger)  / <alpha-value>)",
+          },
+          fontFamily: {
+            sans: ["system-ui", "-apple-system", "Segoe UI", "sans-serif"],
+            mono: ["ui-monospace", "SFMono-Regular", "Menlo", "monospace"],
+          },
+        },
+      },
+    };
+  </script>
+
+  <!-- HTMX (+ SSE extension for live run status) and Alpine -->
+  <script src="https://unpkg.com/htmx.org@2.0.3"></script>
+  <script src="https://unpkg.com/htmx-ext-sse@2.2.2/sse.js"></script>
+  <!-- Markdown rendering for the RFC preview (decision #26 / F6). marked = MD→HTML; DOMPurify
+       sanitises the output before it is injected. -->
+  <script src="https://unpkg.com/marked@12.0.2/marked.min.js"></script>
+  <script src="https://unpkg.com/dompurify@3.0.11/dist/purify.min.js"></script>
+  <script>
+    // Render every [data-md] element's textContent as sanitised Markdown (idempotent).
+    window.renderMarkdown = function (root) {
+      if (!window.marked || !window.DOMPurify) return;
+      (root || document).querySelectorAll("[data-md]:not([data-md-done])").forEach(function (el) {
+        var src = el.getAttribute("data-md-src");
+        var raw = src ? (document.getElementById(src) || {}).textContent : el.textContent;
+        el.innerHTML = window.DOMPurify.sanitize(window.marked.parse(raw || ""));
+        el.setAttribute("data-md-done", "1");
+      });
+    };
+    document.addEventListener("DOMContentLoaded", function () {
+      window.renderMarkdown();
+      // Re-render after HTMX swaps (SSE timeline ticks) bring in new [data-md] blocks.
+      document.body.addEventListener("htmx:afterSwap", function (e) {
+        window.renderMarkdown(e.target);
+      });
+    });
+  </script>
+  <script defer src="https://unpkg.com/alpinejs@3.14.3/dist/cdn.min.js"></script>
 </head>
-<body>
-  <header>
-    <a class="brand" href="/">⚙ ASH</a>
-    <nav>
-      <a href="/ui/connectors">Connectors</a>
-      <a href="/ui/runs">Runs</a>
-      <a href="/ui/runs/new">New run</a>
-      <a href="/admin" target="_blank">Admin</a>
-      <a href="/docs" target="_blank">API</a>
-    </nav>
-  </header>
-  <main>{% block body %}{% endblock %}</main>
+
+<body class="bg-bg text-fg font-sans antialiased min-h-screen">
+  {% set path = request.url.path %}
+  <div class="flex min-h-screen">
+
+    <!-- ───────────────────────── Sidebar ───────────────────────── -->
+    <aside class="hidden md:flex w-60 shrink-0 flex-col border-r border-border bg-surface">
+      <a href="/" class="flex items-center gap-2 px-5 h-14 border-b border-border font-bold tracking-tight">
+        <span class="text-accent text-lg">⚙</span> ASH
+      </a>
+      <nav class="flex-1 overflow-y-auto py-3 text-sm">
+        {% macro navlink(href, label, icon, active) %}
+          <a href="{{ href }}"
+             class="flex items-center gap-3 px-5 py-2 transition-colors
+                    {% if active %}text-fg bg-elevate border-l-2 border-accent{% else %}text-muted hover:text-fg hover:bg-elevate/50 border-l-2 border-transparent{% endif %}">
+            <span class="w-4 text-center">{{ icon }}</span>{{ label }}
+          </a>
+        {% endmacro %}
+        {% macro navsoon(label, icon) %}
+          <span class="flex items-center gap-3 px-5 py-2 text-muted/50 cursor-not-allowed select-none"
+                title="Planned — not yet built (see plan §12–§13)">
+            <span class="w-4 text-center">{{ icon }}</span>{{ label }}
+            <span class="ml-auto text-[10px] uppercase tracking-wide bg-border/60 rounded px-1.5 py-0.5">soon</span>
+          </span>
+        {% endmacro %}
+
+        {{ navlink("/", "Dashboard", "▦", path == "/") }}
+        {{ navlink("/ui/work", "Work board", "▤", path.startswith("/ui/work")) }}
+        {{ navlink("/ui/runs", "Runs", "↻", path.startswith("/ui/runs") and path != "/ui/runs/new") }}
+        {{ navlink("/ui/pm-runs", "PM runs", "✦", path.startswith("/ui/pm-runs")) }}
+        {{ navlink("/ui/agents", "Agents", "◇", path.startswith("/ui/agents")) }}
+        {{ navlink("/ui/connectors", "Connectors", "⇄", path.startswith("/ui/connectors")) }}
+        {{ navlink("/ui/approvals", "Approvals", "✓", path.startswith("/ui/approvals")) }}
+
+        <div class="mt-3 pt-3 border-t border-border px-5 text-[11px] uppercase tracking-wider text-muted/60">System</div>
+        {{ navlink("/admin", "Admin", "⚙", false) }}
+        {{ navlink("/docs", "API docs", "{ }", false) }}
+      </nav>
+      <div class="px-5 py-3 border-t border-border text-[11px] text-muted/60">
+        Agentic Software House
+      </div>
+    </aside>
+
+    <!-- ───────────────────────── Main column ───────────────────────── -->
+    <div class="flex-1 flex flex-col min-w-0">
+
+      <!-- Top bar -->
+      <header class="h-14 shrink-0 flex items-center gap-3 px-4 md:px-6 border-b border-border bg-surface/60 backdrop-blur">
+        <!-- mobile sidebar toggle -->
+        <div x-data="{ open:false }" class="md:hidden relative">
+          <button @click="open=!open" class="text-muted hover:text-fg px-2 py-1" aria-label="Menu">☰</button>
+          <div x-show="open" x-cloak @click.outside="open=false"
+               class="absolute z-20 mt-2 w-48 bg-surface border border-border rounded-lg shadow-xl py-2 text-sm">
+            <a href="/" class="block px-4 py-2 text-muted hover:text-fg hover:bg-elevate">Dashboard</a>
+            <a href="/ui/work" class="block px-4 py-2 text-muted hover:text-fg hover:bg-elevate">Work board</a>
+            <a href="/ui/runs" class="block px-4 py-2 text-muted hover:text-fg hover:bg-elevate">Runs</a>
+            <a href="/ui/pm-runs" class="block px-4 py-2 text-muted hover:text-fg hover:bg-elevate">PM runs</a>
+            <a href="/ui/agents" class="block px-4 py-2 text-muted hover:text-fg hover:bg-elevate">Agents</a>
+            <a href="/ui/connectors" class="block px-4 py-2 text-muted hover:text-fg hover:bg-elevate">Connectors</a>
+            <a href="/ui/approvals" class="block px-4 py-2 text-muted hover:text-fg hover:bg-elevate">Approvals</a>
+            <a href="/admin" class="block px-4 py-2 text-muted hover:text-fg hover:bg-elevate">Admin</a>
+          </div>
+        </div>
+
+        <div class="text-sm text-muted">{% block breadcrumb %}{% endblock %}</div>
+
+        <div class="flex-1"></div>
+
+        <!-- global search -->
+        <label class="hidden sm:flex items-center bg-bg border border-border rounded-lg px-3 h-9 w-64 max-w-[40vw]">
+          <span class="text-muted mr-2">⌕</span>
+          <input type="search" placeholder="Search runs, specs…" disabled
+                 class="bg-transparent outline-none text-sm w-full placeholder:text-muted/60"
+                 title="Global search — wired in U2">
+        </label>
+
+        <!-- theme toggle -->
+        <button @click="darkMode = !darkMode; localStorage.setItem('theme', darkMode ? 'dark' : 'light')"
+                class="w-9 h-9 flex items-center justify-center rounded-lg text-muted hover:text-fg
+                       hover:bg-elevate transition-colors shrink-0"
+                :title="darkMode ? 'Switch to light mode' : 'Switch to dark mode'"
+                aria-label="Toggle theme">
+          <!-- sun = shown in dark mode (click to go light) -->
+          <svg x-show="darkMode" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20"
+               fill="currentColor" class="w-4 h-4">
+            <path d="M10 2a.75.75 0 0 1 .75.75v1.5a.75.75 0 0 1-1.5 0v-1.5A.75.75 0 0 1 10 2ZM10 15a.75.75 0 0 1 .75.75v1.5a.75.75 0 0 1-1.5 0v-1.5A.75.75 0 0 1 10 15ZM10 7a3 3 0 1 0 0 6 3 3 0 0 0 0-6ZM15.657 5.404a.75.75 0 1 0-1.06-1.06l-1.061 1.06a.75.75 0 0 0 1.06 1.06l1.06-1.06ZM6.464 14.596a.75.75 0 1 0-1.06-1.06l-1.06 1.06a.75.75 0 0 0 1.06 1.06l1.06-1.06ZM18 10a.75.75 0 0 1-.75.75h-1.5a.75.75 0 0 1 0-1.5h1.5A.75.75 0 0 1 18 10ZM5 10a.75.75 0 0 1-.75.75h-1.5a.75.75 0 0 1 0-1.5h1.5A.75.75 0 0 1 5 10ZM14.596 15.657a.75.75 0 0 0 1.06-1.06l-1.06-1.061a.75.75 0 1 0-1.06 1.06l1.06 1.06ZM5.404 6.464a.75.75 0 0 0 1.06-1.06L5.403 4.343a.75.75 0 0 0-1.06 1.06l1.06 1.061Z"/>
+          </svg>
+          <!-- moon = shown in light mode (click to go dark) -->
+          <svg x-show="!darkMode" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20"
+               fill="currentColor" class="w-4 h-4">
+            <path fill-rule="evenodd" d="M7.455 2.004a.75.75 0 0 1 .26.77 7 7 0 0 0 9.958 7.967.75.75 0 0 1 1.067.853A8.5 8.5 0 1 1 6.647 1.921a.75.75 0 0 1 .808.083Z" clip-rule="evenodd"/>
+          </svg>
+        </button>
+
+        <!-- + New menu -->
+        <div x-data="{ open:false }" class="relative">
+          <button @click="open=!open"
+                  class="bg-accent text-bg font-semibold text-sm rounded-lg px-3 h-9 hover:brightness-110">
+            + New
+          </button>
+          <div x-show="open" x-cloak @click.outside="open=false"
+               class="absolute right-0 z-20 mt-2 w-44 bg-surface border border-border rounded-lg shadow-xl py-1 text-sm">
+            <a href="/ui/runs/new" class="block px-4 py-2 text-fg hover:bg-elevate">New run</a>
+            <a href="/admin/connector/create" class="block px-4 py-2 text-fg hover:bg-elevate">New connector</a>
+          </div>
+        </div>
+      </header>
+
+      <!-- Page body -->
+      <main class="flex-1 overflow-y-auto px-4 md:px-8 py-6">
+        <div class="mx-auto max-w-6xl">
+          {% block body %}{% endblock %}
+        </div>
+      </main>
+    </div>
+  </div>
 </body>
 </html>

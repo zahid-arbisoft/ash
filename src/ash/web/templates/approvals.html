@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %}Approvals{% endblock %}
+{% block breadcrumb %}Approvals{% endblock %}
+{% block body %}
+
+<div class="mb-6">
+  <h1 class="text-xl font-semibold">Approvals</h1>
+  <p class="text-sm text-muted mt-0.5">Runs paused at a human-in-the-loop gate, waiting on your decision.</p>
+</div>
+
+{% if runs %}
+<div class="bg-surface border border-border rounded-xl divide-y divide-border/60">
+  {% for item in runs %}
+  {% set r = item.record %}
+  {% set gate = item.gate_label %}
+  {% set gate_color = {
+    "Spec review":    "bg-warn/15 text-warn",
+    "Agent trigger":  "bg-accent/15 text-accent",
+    "Merge approval": "bg-ok/15 text-ok",
+  }.get(gate, "bg-border text-muted") %}
+  <div class="flex items-center gap-4 px-5 py-4">
+    <span class="w-2.5 h-2.5 rounded-full bg-warn animate-pulse flex-shrink-0"></span>
+    <div class="min-w-0 flex-1">
+      <div class="flex items-center gap-2 flex-wrap">
+        <a href="/ui/runs/{{ r.run_id }}" class="font-mono text-accent hover:underline">{{ r.run_id[:8] }}</a>
+        <span class="text-xs px-2 py-0.5 rounded-full {{ gate_color }}">{{ gate }}</span>
+        <span class="text-sm text-muted">{{ r.project }} · {{ r.item_id }}</span>
+      </div>
+      <div class="text-xs text-muted/70 mt-0.5">{{ r.intake_mode }} · {{ r.created_at.strftime("%b %d, %H:%M") }}</div>
+    </div>
+    <a href="/ui/runs/{{ r.run_id }}"
+       class="bg-accent text-bg font-semibold text-sm rounded-lg px-4 h-9 inline-flex items-center hover:brightness-110">
+      Review →
+    </a>
+  </div>
+  {% endfor %}
+</div>
+{% else %}
+<div class="bg-surface border border-border rounded-xl px-5 py-12 text-center text-muted text-sm">
+  Nothing waiting for review. 🎉
+</div>
+{% endif %}
+
+{% endblock %}

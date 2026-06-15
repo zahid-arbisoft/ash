@@ -1,0 +1,368 @@
+{# Live run timeline — re-rendered on each SSE tick and on approve/reject. Per-story (decision #26).
+   Expects: run_id, state (dict, may be empty), task_statuses (dict), metrics (dict). #}
+
+{%- set status = state.status or "running" -%}
+{%- set pending = state.pending_review or status == "awaiting_review" -%}
+{%- set tone = {"completed":"bg-ok/15 text-ok","failed":"bg-danger/15 text-danger",
+                "awaiting_review":"bg-warn/15 text-warn","awaiting_merge":"bg-ok/15 text-ok",
+                "awaiting_trigger":"bg-accent/15 text-accent","running":"bg-accent/15 text-accent"} -%}
+{%- set _order = state.story_order or (state.stories or {}).keys()|list -%}
+{%- set _stories = state.stories or {} -%}
+{%- set _metrics = metrics if metrics is defined else {"totals":{},"by_story":{}} -%}
+{%- set _by_story = _metrics.by_story or {} -%}
+{# Collect PR links across stories for the top-right header. #}
+{%- set prs = [] -%}
+{%- for tid in _order -%}
+  {%- set s = _stories.get(tid) or {} -%}
+  {%- if s.pr_url -%}{{ prs.append((tid, s.pr_url)) or "" }}{%- endif -%}
+{%- endfor -%}
+
+<div class="flex items-center gap-3 mb-5 flex-wrap">
+  <span class="text-xs px-2.5 py-1 rounded-full font-medium {{ tone.get(status, 'bg-border text-muted') }}">
+    {{ status }}{% if status == "running" %} <span class="animate-pulse">●</span>{% endif %}
+  </span>
+  <span class="text-sm text-muted">{{ state.project or "" }}{% if state.item_id %} · {{ state.item_id }}{% endif %}</span>
+  {% if state.intake_mode %}<span class="text-xs px-2 py-0.5 rounded-full bg-border text-muted">{{ state.intake_mode }}</span>{% endif %}
+  {% if state.story_mode %}<span class="text-xs px-2 py-0.5 rounded-full bg-border text-muted">{{ state.story_mode }} story</span>{% endif %}
+
+  <span class="ml-auto flex items-center gap-3">
+    {# ── PR link(s), top-right (decision #26) ── #}
+    {% if prs|length == 1 %}
+      <a href="{{ prs[0][1] }}" target="_blank"
+         class="text-xs font-medium px-2.5 py-1 rounded-full bg-accent/15 text-accent hover:bg-accent/25">↗ Pull request</a>
+    {% elif prs|length > 1 %}
+      <details class="relative" data-key="pr-menu">
+        <summary class="list-none cursor-pointer text-xs font-medium px-2.5 py-1 rounded-full bg-accent/15 text-accent hover:bg-accent/25">↗ {{ prs|length }} PRs</summary>
+        <div class="absolute right-0 mt-1 z-10 bg-surface border border-border rounded-lg shadow-lg p-1 min-w-44">
+          {% for tid, url in prs %}
+          <a href="{{ url }}" target="_blank" class="block px-3 py-1.5 text-xs hover:bg-elevate rounded">
+            <span class="font-mono text-accent">{{ tid }}</span> — PR ↗
+          </a>
+          {% endfor %}
+        </div>
+      </details>
+    {% endif %}
+    {% if state.issue_url %}
+      <a href="{{ state.issue_url }}" target="_blank" class="text-xs text-accent hover:underline">source ↗</a>
+    {% elif state.attachments %}
+      {% for path in state.attachments %}
+        <a href="/ui/runs/{{ run_id }}/attachment/{{ loop.index0 }}" target="_blank"
+           class="text-xs text-accent hover:underline">{{ path.split('/')[-1] }} ↗</a>
+      {% endfor %}
+    {% endif %}
+  </span>
+</div>
+
+{# ── Analytics totals strip (F8) ── #}
+{% set _tot = _metrics.totals or {} %}
+{% if _tot.total_tokens %}
+<div class="flex items-center gap-4 text-xs text-muted mb-5 px-1">
+  <span title="prompt + completion tokens this run">🪙 <span class="font-mono tabular-nums text-fg">{{ "{:,}".format(_tot.total_tokens) }}</span> tokens
+    (↑{{ "{:,}".format(_tot.prompt_tokens or 0) }} ↓{{ "{:,}".format(_tot.completion_tokens or 0) }})</span>
+  <span title="total agent wall-clock">⏱ <span class="font-mono tabular-nums text-fg">{{ "%.1f"|format((_tot.duration_ms or 0) / 1000) }}s</span></span>
+  <span>{{ _tot.runs or 0 }} agent run(s)</span>
+</div>
+{% endif %}
+
+{# ── HITL gate: spec review (PM) — with per-story selection (§4.2) ── #}
+{% if pending %}
+{% set _spec = (state.pm or {}).spec %}
+<div class="border border-warn/40 bg-warn/5 rounded-xl p-5 mb-5">
+  <h3 class="font-semibold text-warn mb-1">Spec review required</h3>
+  <p class="text-sm text-muted mb-4">
+    Review the generated spec below, then approve to build {% if _spec and _spec.tickets and _spec.tickets|length > 1 %}the selected stories one by one (each gets its own PR){% else %}this story{% endif %},
+    or reject to cancel without pushing anything.
+  </p>
+  {# The checkboxes + buttons live in one form; htmx includes the checked story ids on approve. #}
+  <form>
+    {% if _spec and _spec.tickets and _spec.tickets|length > 1 %}
+    <div class="text-xs uppercase tracking-wide text-muted mb-2">Stories to build (uncheck to skip)</div>
+    <div class="space-y-2 mb-4">
+      {% for t in _spec.tickets %}
+      <label class="flex items-start gap-2.5 text-sm cursor-pointer">
+        <input type="checkbox" name="stories" value="{{ t.id }}" checked class="mt-1 shrink-0">
+        <span class="leading-snug"><span class="font-mono text-xs text-accent">{{ t.id }}</span>
+          <span class="font-medium">{{ t.title }}</span>
+          {% if t.needs_research %}<span class="text-[10px] px-1.5 py-0.5 rounded bg-warn/15 text-warn ml-1">spike</span>{% endif %}
+        </span>
+      </label>
+      {% endfor %}
+    </div>
+    {% endif %}
+    <div class="flex gap-2">
+      <button hx-post="/ui/runs/{{ run_id }}/approve" hx-include="closest form"
+              hx-target="#run-timeline" hx-swap="innerHTML"
+              class="bg-ok text-bg font-semibold text-sm rounded-lg px-4 h-9 hover:brightness-110">
+        {% if _spec and _spec.tickets and _spec.tickets|length > 1 %}Approve &amp; build selected{% else %}Approve &amp; push tickets{% endif %}
+      </button>
+      <button hx-post="/ui/runs/{{ run_id }}/reject" hx-target="#run-timeline" hx-swap="innerHTML"
+              class="border border-danger/50 text-danger font-semibold text-sm rounded-lg px-4 h-9 hover:bg-danger/10">
+        Reject
+      </button>
+    </div>
+  </form>
+</div>
+{% endif %}
+
+{# ── HITL gate: manual trigger ── #}
+{% if state.pending_trigger %}
+<div class="border border-accent/40 bg-accent/5 rounded-xl p-5 mb-5">
+  <h3 class="font-semibold text-accent mb-1 capitalize">{{ state.pending_trigger }} agent ready{% if state.pending_story %} · story {{ state.pending_story }}{% endif %}</h3>
+  <p class="text-sm text-muted mb-4">
+    The <strong class="capitalize">{{ state.pending_trigger }}</strong> agent is configured for manual trigger. Click <em>Trigger</em> to start it.
+  </p>
+  <button hx-post="/ui/runs/{{ run_id }}/trigger" hx-target="#run-timeline" hx-swap="innerHTML"
+          class="bg-accent text-bg font-semibold text-sm rounded-lg px-4 h-9 hover:brightness-110">
+    Trigger {{ state.pending_trigger | capitalize }}
+  </button>
+</div>
+{% endif %}
+
+{# ── HITL gate: merge approval ── #}
+{% if state.pending_merge %}
+<div class="border border-ok/40 bg-ok/5 rounded-xl p-5 mb-5">
+  <h3 class="font-semibold text-ok mb-1">Ready to merge{% if state.pending_story %} · story {{ state.pending_story }}{% endif %}</h3>
+  <p class="text-sm text-muted mb-4">The Reviewer approved the PR. Approve to merge, or reject to skip.</p>
+  <div class="flex gap-2">
+    <button hx-post="/ui/runs/{{ run_id }}/approve" hx-target="#run-timeline" hx-swap="innerHTML"
+            class="bg-ok text-bg font-semibold text-sm rounded-lg px-4 h-9 hover:brightness-110">Approve &amp; merge</button>
+    <button hx-post="/ui/runs/{{ run_id }}/reject" hx-target="#run-timeline" hx-swap="innerHTML"
+            class="border border-danger/50 text-danger font-semibold text-sm rounded-lg px-4 h-9 hover:bg-danger/10">Reject</button>
+  </div>
+</div>
+{% endif %}
+
+{# ── Run-level failure (intake/pm/rfc) → retry the whole run ── #}
+{% if status == "failed" %}
+  {%- set _run_steps = [("intake","Intake"),("pm","PM"),("rfc","RFC")] -%}
+  {%- set rl = namespace(failed=None, label=None) -%}
+  {%- for key, lbl in _run_steps -%}
+    {%- if rl.failed is none and (state[key] or {}).error -%}{%- set rl.failed = key -%}{%- set rl.label = lbl -%}{%- endif -%}
+  {%- endfor -%}
+  {% if rl.failed %}
+  <div class="border border-danger/40 bg-danger/5 rounded-xl p-5 mb-5">
+    <h3 class="font-semibold text-danger mb-1">Run failed at {{ rl.label }}</h3>
+    <p class="text-sm text-muted mb-4">{{ (state[rl.failed] or {}).error }}</p>
+    <form method="post" action="/ui/runs/{{ run_id }}/retry">
+      <button type="submit" class="bg-accent text-bg font-semibold text-sm rounded-lg px-4 h-9 hover:brightness-110">Retry from {{ rl.label }}</button>
+    </form>
+  </div>
+  {% endif %}
+{% endif %}
+
+{# ── Stage macros ── #}
+{%- set _ts = task_statuses if task_statuses is defined else {} -%}
+{%- macro stat(sub, has_output, running_hint=false) -%}
+  {{- "error" if sub.error else ("skipped" if (sub.note and "skipped" in sub.note)
+       else ("done" if has_output else ("running" if running_hint else "pending"))) -}}
+{%- endmacro -%}
+{%- set ICON = {"done":"✓","error":"✕","skipped":"⊘","pending":"○","running":"◉"} -%}
+{%- set COL = {"done":"text-ok border-ok/40","error":"text-danger border-danger/40",
+               "skipped":"text-muted border-border","pending":"text-muted/50 border-border",
+               "running":"text-accent border-accent/60"} -%}
+
+{% macro run_stage(label, sub, has_output, agent_key, desc) %}
+  {%- set db_st = _ts.get(agent_key, "") -%}
+  {%- set st = stat(sub, has_output, db_st == "in_progress")|trim -%}
+  <li class="flex gap-3 py-3">
+    <span class="shrink-0 w-7 h-7 rounded-full border grid place-items-center text-sm {{ COL[st] }}{% if st == 'running' %} animate-pulse{% endif %}">{{ ICON[st] }}</span>
+    <div class="min-w-0 flex-1">
+      <div class="flex items-center gap-2 flex-wrap">
+        <span class="font-medium text-sm">{{ label }}</span>
+        <span class="text-[11px] uppercase tracking-wide text-muted/60">{{ st }}</span>
+        {%- if sub.tokens and (sub.tokens.prompt_tokens or sub.tokens.completion_tokens) %}
+        <span class="ml-auto font-mono text-[10px] text-muted/60 tabular-nums" title="prompt / completion tokens">↑{{ "{:,}".format(sub.tokens.prompt_tokens) }} ↓{{ "{:,}".format(sub.tokens.completion_tokens) }}</span>
+        {%- endif %}
+      </div>
+      {% if desc %}<p class="text-[11px] text-muted/50 mt-0.5 leading-snug">{{ desc }}</p>{% endif %}
+      {% if sub.error %}<p class="text-xs text-danger mt-0.5">{{ sub.error }}</p>
+      {% elif sub.note %}<p class="text-xs text-muted mt-0.5">{{ sub.note }}</p>{% endif %}
+    </div>
+  </li>
+{% endmacro %}
+
+{# Per-story stage row, with a metric chip from analytics and a per-step regenerate control. #}
+{% macro story_stage(label, sub, has_output, ticket, agent, running_hint) %}
+  {%- set st = stat(sub, has_output, running_hint)|trim -%}
+  {%- set m = (_by_story.get(ticket) or {}).get(agent) or {} -%}
+  <li class="flex gap-3 py-2.5 items-start">
+    <span class="shrink-0 w-7 h-7 rounded-full border grid place-items-center text-sm {{ COL[st] }}{% if st == 'running' %} animate-pulse{% endif %}">{{ ICON[st] }}</span>
+    <div class="min-w-0 flex-1">
+      <div class="flex items-center gap-2 flex-wrap">
+        <span class="text-sm font-medium">{{ label }}</span>
+        <span class="text-[11px] uppercase tracking-wide text-muted/60">{{ st }}</span>
+        {%- if m.total_tokens %}
+        <span class="ml-auto font-mono text-[11px] text-muted/60 tabular-nums" title="tokens · time">{{ "{:,}".format(m.total_tokens) }}t · {{ "%.1f"|format((m.duration_ms or 0)/1000) }}s</span>
+        {%- endif %}
+      </div>
+      {% if sub.error %}<p class="text-xs text-danger mt-1 line-clamp-3">{{ sub.error }}</p>
+      {% elif sub.note %}<p class="text-xs text-muted/80 mt-1 line-clamp-2">{{ sub.note }}</p>{% endif %}
+    </div>
+    {# per-step regenerate #}
+    <form method="post" action="/ui/runs/{{ run_id }}/stories/{{ ticket }}/rerun" class="shrink-0">
+      <input type="hidden" name="step" value="{{ agent }}">
+      <button type="submit" title="Re-run {{ label }} for this story"
+              class="text-xs px-2 py-1 rounded border border-border text-muted hover:text-accent hover:border-accent/50">↻</button>
+    </form>
+  </li>
+{% endmacro %}
+
+{# ── Run-level pipeline (Intake → PM → RFC) ── #}
+<ol class="bg-surface border border-border rounded-xl px-5 divide-y divide-border/60 mb-5">
+  {{ run_stage("Intake", state.intake or {}, state.raw_issue, "pm",
+           "Fetches the issue from the connector or parses uploaded files into a raw work item.") }}
+  {{ run_stage("PM — spec & tickets", state.pm or {}, (state.pm or {}).spec, "pm",
+           "Turns raw requirements into a technical spec, epic, and ticket breakdown for your review.") }}
+  {{ run_stage("RFC — design doc", state.rfc or {}, (state.rfc or {}).doc, "rfc",
+           "Drafts one optional design document for the run before any code is written.") }}
+</ol>
+
+{# ── Spec ── #}
+{% set spec = (state.pm or {}).spec %}
+{% if spec %}
+<section class="bg-surface border border-border rounded-xl p-5 mb-5">
+  <h3 class="font-semibold mb-1">{{ spec.epic.title }}</h3>
+  <p class="text-sm text-muted mb-3">{{ spec.epic.summary }}</p>
+  {% if spec.epic.acceptance_criteria %}
+  <div class="text-sm mb-3">
+    <div class="text-xs uppercase tracking-wide text-muted mb-1">Acceptance criteria</div>
+    <ul class="list-disc list-inside space-y-0.5 text-muted">
+      {% for a in spec.epic.acceptance_criteria %}<li>{{ a }}</li>{% endfor %}
+    </ul>
+  </div>
+  {% endif %}
+  <details class="group border-t border-border/60 py-2" data-key="tech">
+    <summary class="cursor-pointer text-sm font-medium select-none">Technical approach</summary>
+    <div class="text-sm text-muted mt-2 space-y-1">
+      <p>{{ spec.technical_spec.approach }}</p>
+      {% if spec.technical_spec.affected_areas %}<p><span class="text-fg">Affected:</span> {{ spec.technical_spec.affected_areas|join(", ") }}</p>{% endif %}
+      <p><span class="text-fg">Testing:</span> {{ spec.technical_spec.testing_strategy }}</p>
+    </div>
+  </details>
+  {% if spec.risk_assessment %}
+  <details class="group border-t border-border/60 py-2" data-key="risks">
+    <summary class="cursor-pointer text-sm font-medium select-none">Risks ({{ spec.risk_assessment|length }})</summary>
+    <ul class="mt-2 space-y-2 text-sm">
+      {% for r in spec.risk_assessment %}
+      {% set sv = {"high":"text-danger","medium":"text-warn","low":"text-muted"}.get(r.severity, "text-muted") %}
+      <li><span class="font-medium {{ sv }}">[{{ r.severity }}]</span> {{ r.description }} <span class="text-muted">— {{ r.mitigation }}</span></li>
+      {% endfor %}
+    </ul>
+  </details>
+  {% endif %}
+  {% if spec.open_questions %}
+  <div class="mt-3 border-t border-border/60 pt-3 text-sm">
+    <div class="text-xs uppercase tracking-wide text-warn mb-1">Open questions</div>
+    <ul class="list-disc list-inside space-y-0.5 text-muted">
+      {% for q in spec.open_questions %}<li>{{ q }}</li>{% endfor %}
+    </ul>
+  </div>
+  {% endif %}
+  {% if (state.pm or {}).ticket_refs %}
+  <div class="mt-3 border-t border-border/60 pt-3 text-sm">
+    <span class="text-xs uppercase tracking-wide text-muted">Pushed tickets:</span>
+    {% for ref in state.pm.ticket_refs %}<span class="text-accent">{{ ref }}</span>{% if not loop.last %}, {% endif %}{% endfor %}
+  </div>
+  {% endif %}
+</section>
+{% endif %}
+
+{# ── RFC design doc — Markdown preview (decision #26 / F6) ── #}
+{% set rfc = state.rfc or {} %}
+{% if rfc.doc %}
+<section class="bg-surface border border-border rounded-xl p-5 mb-5">
+  <div class="flex items-center gap-2 mb-2">
+    <h3 class="font-semibold">{{ rfc.title or "RFC — design document" }}</h3>
+    <span class="text-xs px-2 py-0.5 rounded-full bg-accent/15 text-accent">RFC</span>
+    {% if rfc.doc_ref %}
+      {% if rfc.doc_ref.startswith("http") %}<a href="{{ rfc.doc_ref }}" target="_blank" class="text-xs text-accent hover:underline ml-auto">{{ rfc.doc_ref }} ↗</a>
+      {% else %}<span class="font-mono text-[11px] text-muted ml-auto">{{ rfc.doc_ref }}</span>{% endif %}
+    {% endif %}
+  </div>
+  {# Rendered Markdown (sanitised client-side). Raw source kept in a hidden node + a Raw details. #}
+  <pre id="rfc-src-{{ run_id }}" class="hidden">{{ rfc.doc }}</pre>
+  <div data-md data-md-src="rfc-src-{{ run_id }}"
+       class="prose-sm max-w-none text-sm text-muted leading-relaxed
+              [&_h1]:text-fg [&_h1]:font-semibold [&_h1]:text-base [&_h1]:mt-3 [&_h1]:mb-1
+              [&_h2]:text-fg [&_h2]:font-semibold [&_h2]:mt-3 [&_h2]:mb-1
+              [&_ul]:list-disc [&_ul]:list-inside [&_li]:my-0.5 [&_p]:my-1.5
+              [&_code]:px-1 [&_code]:rounded [&_code]:bg-elevate"></div>
+  <details class="group mt-2" data-key="rfc-raw">
+    <summary class="cursor-pointer text-[11px] text-muted/60 select-none">view raw</summary>
+    <pre class="text-xs text-muted mt-2 whitespace-pre-wrap font-mono leading-relaxed">{{ rfc.doc }}</pre>
+  </details>
+</section>
+{% endif %}
+
+{# ── Per-story build (decision #26) ── #}
+{% if _order %}
+{%- set done_count = _order|select("in", _stories)|map("string")|list -%}
+{%- set ns = namespace(done=0) -%}
+{%- for tid in _order %}{% if (_stories.get(tid) or {}).status == "completed" %}{% set ns.done = ns.done + 1 %}{% endif %}{% endfor -%}
+<div class="flex items-center justify-between mb-3">
+  <h3 class="font-semibold text-base">Stories <span class="text-muted font-normal text-sm">({{ ns.done }}/{{ _order|length }} done)</span></h3>
+</div>
+<div class="space-y-4 mb-5">
+  {% for tid in _order %}
+  {% set s = _stories.get(tid) or {} %}
+  {% set sstat = s.status or "pending" %}
+  {% set stone = {"completed":"text-ok","failed":"text-danger","running":"text-accent","pending":"text-muted/60","skipped":"text-muted"} %}
+  <div class="bg-surface border {{ 'border-danger/40' if sstat == 'failed' else 'border-border' }} rounded-xl p-5">
+    <div class="flex items-center gap-2.5 mb-3 flex-wrap">
+      <span class="font-mono text-sm text-accent">{{ tid }}</span>
+      <span class="text-base font-medium">{{ s.title or "story" }}</span>
+      <span class="text-xs uppercase tracking-wide {{ stone.get(sstat,'text-muted') }}">{{ sstat }}{% if sstat == "running" %} <span class="animate-pulse">●</span>{% endif %}</span>
+      {% if s.deps %}<span class="text-xs text-muted/60">depends on {{ s.deps|join(", ") }}</span>{% endif %}
+      <span class="ml-auto flex items-center gap-2">
+        {% if s.pr_url %}<a href="{{ s.pr_url }}" target="_blank" class="text-xs px-2.5 py-1 rounded bg-accent/15 text-accent hover:bg-accent/25">PR ↗</a>{% endif %}
+        {% if sstat == "failed" %}
+        <form method="post" action="/ui/runs/{{ run_id }}/stories/{{ tid }}/rerun">
+          <input type="hidden" name="step" value="{{ s.failed_step or 'research' }}">
+          <button type="submit" class="text-xs px-2.5 py-1 rounded bg-accent text-bg font-medium hover:brightness-110">Retry from {{ s.failed_step or 'research' }}</button>
+        </form>
+        {% endif %}
+      </span>
+    </div>
+    {%- set r = s.research or {} -%}{%- set c = s.coding or {} -%}{%- set rv = s.reviewer or {} -%}{%- set fx = s.fixer or {} -%}
+    <ol class="divide-y divide-border/40 border-t border-border/40">
+      {{ story_stage("Research", r, r.plan or (r.note and 'skipped' in (r.note or '')), tid, "research", sstat == "running" and not (r.plan or r.note)) }}
+      {{ story_stage("Dev — code & PR", c, c.change or c.pr_url, tid, "coding", sstat == "running" and (r.plan or r.note) and not (c.change or c.pr_url)) }}
+      {{ story_stage("Reviewer", rv, rv.review, tid, "reviewer", false) }}
+      {{ story_stage("Fixer", fx, fx.change or (fx.note and 'skipped' in (fx.note or '')), tid, "fixer", false) }}
+    </ol>
+    {# Review findings for this story #}
+    {% set review = rv.review %}
+    {% if review %}
+    <details class="group mt-2 border-t border-border/40 pt-2" data-key="review-{{ tid }}">
+      <summary class="cursor-pointer text-xs font-medium select-none">
+        Review — <span class="{{ 'text-ok' if review.verdict == 'approve' else 'text-warn' }}">{{ review.verdict }}</span>
+        ({{ review.findings|length }} finding{{ "s" if review.findings|length != 1 else "" }})
+        {% if rv.merged %}<span class="text-ok">· merged</span>{% endif %}
+      </summary>
+      <p class="text-xs text-muted mt-2">{{ review.summary }}</p>
+      {% if review.findings %}
+      <ul class="space-y-1 text-xs mt-1">
+        {% for f in review.findings %}
+        {% set sc = {"critical":"text-danger","high":"text-danger","medium":"text-warn","low":"text-muted","nit":"text-muted/70"}.get(f.severity, "text-muted") %}
+        <li><span class="font-mono font-semibold {{ sc }}">[{{ f.severity }}]</span>
+          <span class="text-muted">{{ f.path }}{% if f.line %}:{{ f.line }}{% endif %}</span> — {{ f.comment }}</li>
+        {% endfor %}
+      </ul>
+      {% endif %}
+    </details>
+    {% endif %}
+    {% if r.doc_ref %}
+    <div class="text-[11px] mt-2">
+      <span class="text-muted/60">Research doc:</span>
+      {% if r.doc_ref.startswith("http") %}<a href="{{ r.doc_ref }}" target="_blank" class="text-accent hover:underline">{{ r.doc_ref }} ↗</a>
+      {% else %}<span class="font-mono text-muted">{{ r.doc_ref }}</span>{% endif %}
+    </div>
+    {% endif %}
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
+{% if not state %}
+<p class="text-muted text-sm">Run not found or still initializing…</p>
+{% endif %}

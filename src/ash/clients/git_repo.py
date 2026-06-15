@@ -10,6 +10,7 @@ PR creation lives in `pr.py` (gh CLI).
 from __future__ import annotations
 
 import re
+import shutil
 from pathlib import Path
 
 from git import Repo
@@ -23,7 +24,7 @@ def _slug(text: str, maxlen: int = 40) -> str:
 
 
 class RepoWorkspace:
-    def __init__(self, work: WorkTarget, worktrees_root: Path):
+    def __init__(self, work: WorkTarget, worktrees_root: Path, *, github_token: str = ""):
         path = work.resolved_local_path()
         if not path or not path.exists():
             raise FileNotFoundError(
@@ -31,6 +32,7 @@ class RepoWorkspace:
                 "or LOCAL_REPO_PATH in .env to an existing clone of "
                 f"{work.target_repo}."
             )
+        self._github_token = github_token
         self.work = work
         self.repo = Repo(path)
         if self.repo.bare:
@@ -63,9 +65,36 @@ class RepoWorkspace:
 
     def create_worktree(self, branch: str, base_ref: str) -> Path:
         wt_path = self.worktrees_root / branch.replace("/", "__")
+        wt_name = wt_path.name  # matches the subdir name under .git/worktrees/
+
+        # ── 1. Remove stale worktree directory ──────────────────────────────
         if wt_path.exists():
-            raise FileExistsError(f"worktree already exists: {wt_path}")
-        # git worktree add -b <branch> <path> <base_ref>
+            try:
+                self.repo.git.worktree("remove", "--force", str(wt_path))
+            except Exception:  # noqa: BLE001
+                shutil.rmtree(wt_path, ignore_errors=True)
+
+        # ── 2. Remove stale git-internal worktree metadata ──────────────────
+        # git keeps a lock entry at .git/worktrees/<wt_name>/ even after the
+        # directory is gone. While that entry exists, git refuses to delete the
+        # branch (it considers it "checked out"). Removing it directly is the
+        # only reliable way to unblock `git branch -D`.
+        git_wt_meta = Path(str(self.repo.git_dir)) / "worktrees" / wt_name
+        if git_wt_meta.exists():
+            shutil.rmtree(git_wt_meta, ignore_errors=True)
+
+        try:
+            self.repo.git.worktree("prune")
+        except Exception:  # noqa: BLE001
+            pass
+
+        # ── 3. Delete the stale branch ───────────────────────────────────────
+        try:
+            self.repo.git.branch("-D", branch)
+        except Exception:  # noqa: BLE001
+            pass
+
+        # ── 4. Create fresh worktree ─────────────────────────────────────────
         self.repo.git.worktree("add", "-b", branch, str(wt_path), base_ref)
         return wt_path
 
@@ -89,6 +118,21 @@ class RepoWorkspace:
         wt.index.commit(message)
         return wt.head.commit.hexsha
 
-    def push_branch(self, wt_path: Path, branch: str) -> None:
+    def push_branch(self, wt_path: Path, branch: str, *, force: bool = False) -> None:
         wt = Repo(wt_path)
-        wt.git.push(self.https_url, f"{branch}:refs/heads/{branch}")
+        # Embed token for headless HTTPS auth (Docker / CI — no interactive credential helper).
+        push_url = (
+            self.https_url.replace("https://", f"https://oauth2:{self._github_token}@")
+            if self._github_token
+            else self.https_url
+        )
+        refspec = f"{branch}:refs/heads/{branch}"
+        # `agent/*` branches are bot-owned and regenerated per run. On a RE-RUN of the same issue
+        # the remote branch still holds the previous attempt, while our fresh worktree branched
+        # straight from base — so the two diverge and a normal push is rejected non-fast-forward.
+        # force replaces the stale branch with the latest attempt. (The Fixer's same-run pushes
+        # build on this branch and stay fast-forward, so force is a harmless no-op there.)
+        if force:
+            wt.git.push(push_url, refspec, force=True)
+        else:
+            wt.git.push(push_url, refspec)

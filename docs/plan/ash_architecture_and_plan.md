@@ -278,6 +278,25 @@ with it, so a teammate could point the loop at a new repo at any phase boundary.
 - Skills library (`SKILL.md` per repo), parallel tickets across worktrees, Slack connector for
   escalation, token-budget guardrails per loop, LangSmith observability, pgvector code memory.
 
+### Future capability — Claude Code–style agentic repo harness *(backlog)*
+The Research and Coding agents currently explore the repo via `list_directory` / `grep_code` /
+`read_file` / `search_codebase` tools, which mirrors how Claude Code works inside an editor.  
+A further evolution is a **self-running "harness" mode** modelled directly on Claude Code:
+
+- **Agent-controlled shell loop:** the agent gets a `bash` tool with a sandboxed subprocess;
+  it can run `grep`, `find`, `cat`, `python -m pytest`, etc. itself — just like a human dev
+  would in a terminal. No pre-defined toolkit; the agent composes the commands it needs.
+- **Persistent working context:** across turns the agent accumulates a structured scratchpad
+  (files read, grep results, test outcomes) so it doesn't re-explore on every iteration.
+- **Interrupt-on-blocker:** if the agent reaches a decision point (e.g. ambiguous spec, missing
+  credentials, a failing test it can't diagnose), it calls `interrupt()` to surface the blocker
+  to the human rather than guessing.
+- **Why defer:** the `bash` tool's sandboxing complexity (Docker sub-process, PTY, timeout,
+  resource limits) is non-trivial. The current `run_command`/`DevToolkit` path already covers
+  the 80 % case. Build this when shallow grounding is the measurable bottleneck.
+- **Prerequisite:** Alembic migrations (replace `_PG_COLUMN_BACKFILLS` stopgap) and pgvector
+  code memory should land first so the harness has a persistent index to work from.
+
 ---
 
 ## 6. Recommended Tech Stack (vs. the doc)
@@ -322,6 +341,11 @@ with it, so a teammate could point the loop at a new repo at any phase boundary.
 | 19 | **Pluggable issue-source integrations + per-run intake routing + admin/UI** | Issue sources (GitHub / Jira / Plane) are DB-backed `Integration` rows behind one `IssueProvider` interface; secrets **encrypted at rest** (Fernet). A per-run **intake_mode** (`raw_to_spec` / `spec_ready` / `raw_to_dev`) drives a LangGraph **conditional edge** that uses or skips PM. App DB = **SQLAlchemy 2.0 async** (same Postgres); admin = **SQLAdmin** at `/admin` (env-credentialed); FE = **Jinja2** UI at `/`. New sources = new provider, no graph/agent changes. |
 | 20 | **Intake mode semantics: `raw_to_dev` is the only mode that skips PM** | `raw_to_spec` = PM generates full spec + tickets from raw requirements. `spec_ready` = PM extracts tickets (stories) from a pre-written spec using a distinct prompt — PM is NOT skipped, the JSON-parsing shortcut is removed. `raw_to_dev` = PM skipped entirely; raw issue goes straight to the build team. PM is two graph nodes: `pm` (generate + checkpoint) → `pm_publish` (HITL interrupt → approve/reject → push tickets). |
 | 21 | **Spec quality = prompt rules + deterministic validation (two layers)** | The org spec-quality standard (from arbisoft/ai-skillforge: `ai-first-engineering` + `blueprint`) is enforced, not hoped for. **Layer 1:** six hard rules in the PM system prompt (`_QUALITY_RULES`: no invented context, honor every explicit signal, calibrate scope to the ask, flag unknowns not guess, acyclic dependencies, complete risk assessment) + schema guidance (`Ticket.description` cold-start bar, `Spec.open_questions`). **Layer 2:** `agents/spec_validator.py` proves what's decidable in code (acyclic dependency graph, no dangling/self deps, unique ids, spike↔needs_research). On failure the PM does **one self-correction round** (errors fed back → regenerate); residual issues surface in `open_questions` for the human gate — a structurally broken spec never ships silently. Three skills vendored verbatim into `.claude/skills/`; standard documented in `docs/best_practices.md`. |
+| 22 | **UI overhaul = server-rendered HTMX + Tailwind + Alpine (Jira-style)** | The rudimentary inline-CSS Jinja2 UI is rebuilt into a Jira-style oversight surface **without** a SPA/Node build target: FastAPI+Jinja2 stays the backbone; **Tailwind** (Play CDN → standalone CLI later) supplies the design system, **HTMX** drives partial updates + **SSE** live run status, **Alpine** handles local interactivity. Sidebar+topbar IA; shared macro/partial design system replaces per-template `<style>`; dedicated **PM-runs (searchable/paginated)**, **Agents**, **Connectors**, and **Approvals** sections. Chosen over React/Vue to keep one Python codebase. Detail + roadmap in `agent_runtime_and_connectors_plan.md` §12–§13. |
+| 23 | **Every agent has a trigger mode (`auto`/`manual`) + connectors go MCP-first** | New per-agent `trigger` config (`projects/<name>.yaml` `agents:` map, env override `AGENT_<NAME>__TRIGGER`): **auto** = act on detected/assigned work (scheduler/webhook dispatch); **manual** = wait for explicit UI/API trigger. Orthogonal to `Autonomy` (which gates dangerous mid-loop steps). Connectors are reframed **MCP-first** (unlimited platforms via their MCP servers) with the legacy httpx providers kept as a **visible backup** in admin; per-kind config becomes discriminated Pydantic (no free-form JSON), with role/MCP validators and a connection health check; `task_sink_id` is persisted on `RunRecord`. See plan §10.0, §11. |
+| 24 | **Failed runs retry from the failed step, not from scratch** | A run that fails at step X (RFC/Research/Coding/…) can be re-run from X without redoing the successful upstream work. `Runner.retry_run` forks the run's LangGraph checkpoint via `aupdate_state(as_node=<predecessor>)` so X becomes the next node, then `ainvoke(None)` completes the pipeline; each re-run node overwrites its namespace, clearing stale errors. Chosen over (a) marking the whole run dead + starting fresh (loses the spec/plan) and (b) auto-retry loops (a wrong-input failure would just re-fail) — a human inspects the error and clicks **Retry from <step>**. Structured-generation agents already run two-phase (explore→extract) and the explore phase is a hand-rolled `auto`-tool-choice loop, since `create_agent`'s `tool_choice="none"` synthesis turn 400s on Groq `gpt-oss-*`. |
+| 25 | **The build unit is a ticket; Research is optional** | A run can set `ticket_id` to scope the build team (Research → Dev → Reviewer → Fixer) to a single spec ticket on its own branch (`brief()` returns a focused per-ticket brief); blank = build the whole spec as one PR (prior behaviour). Set via the run form or a per-ticket **Build this ticket** button on the spec view. Independently, **Dev no longer depends on Research**: worktree setup is shared (`agents/worktree.py`), and when Research is disabled/skipped Coding creates the worktree itself and builds from the brief with no plan — so a user can turn off the flaky Research agent and still ship. Full per-spec fan-out (auto-spawn one sub-run per ticket) is a later layer; today ticket selection is explicit (form field / button). |
+| 26 | **Story = unit of execution; per-story fan-out, retry & regenerate inside one run (LangGraph-first)** | Supersedes #25's "one run = one ticket". The build phase becomes a **per-story subgraph keyed by `ticket_id`** inside a single run: `WorkflowState.stories: dict[ticket_id, StoryState]` (reducer-merged) + `story_order` + a sequential `story_router`→`story_build` loop. Stories run **one by one** in dependency order; each gets its **own PR** (deterministic branch `ash/<run>/<ticket_id>`, persisted `branch`/`pr_url` → Coding/Fixer **update, never duplicate**). PM gains a **single (default) / multiple** stories toggle. **Retry is per-story** (`retry_run(ticket_id, from_step)` re-enters the router → resumes at the failed story, skips completed ones); **manual per-story regenerate** (re-research / regenerate-PR / re-review / re-fix) uses the same fork. RFC is **always one per run**. UI: per-story timeline cards + per-PR progress + top-right PR link/dropdown; RFC Markdown preview + `hx-preserve` collapse fix. Full design: **`docs/plan/per_story_fanout_and_oversight_plan.md`**. |
 
 ### 7a. Repo topology — configurable per project
 
@@ -513,6 +537,324 @@ Don't remove a gate until the thing under it has earned it.
 ## 11. Changelog
 
 Per the working agreement (top of doc), every decision/implementation change is logged here.
+
+- **2026-06-17 — Research indexing guardrail + onboarding runbook.** (1) On a large repo the
+  Research agent sat in `chroma.index_directory` (local ONNX embeddings) for minutes before its
+  first LLM call — and F7's chunking made it worse (more documents). Added `INDEX_MAX_FILES`
+  (default 1500): `VectorStoreClient.count_indexable` cheaply checks the file count first, and above
+  the cap Research **skips semantic indexing and uses the grep fallback**; below it, indexes with a
+  hard `max_files` cap + `INDEX_PROGRESS_EVERY` progress logging. Set `INDEX_MAX_FILES=0` to always
+  index, `1` to force grep-only. +2 tests. (2) Wrote **`docs/ONBOARD_A_PROJECT.md`** — the
+  end-to-end setup runbook (install → `.env` → infra → `projects/<name>.yaml` → connector → first
+  run → troubleshooting), incl. **fork-vs-single** guidance (a fork is *not* required; `mode:
+  single` for org-owned repos). 168 tests green, ruff + mypy --strict clean.
+
+- **2026-06-17 — Fixes (decision #26 follow-up):** (1) global `input{width:100%}` legacy shim was
+  stretching checkboxes/radios — added an `input[type=checkbox],input[type=radio]{width:auto;…}`
+  override in `base.html`, fixing the spec-review checkboxes and the single/multiple radio
+  alignment. (2) "Approve & build selected" now works: the gate is a real `<form>` of
+  `name="stories"` checkboxes and `POST /ui/runs/{id}/approve` reads them into the
+  `{action, stories}` decision (the prior Alpine `hx-vals js:` couldn't see Alpine scope). (3)
+  Per-story run-page UI enlarged (bigger stage icons/text/padding). (4) **All app models registered
+  in `/admin`**: added `SpecRecordAdmin`, `StoryRecordAdmin`, `AgentTaskAdmin`,
+  `AgentRunMetricAdmin`, `AgentPolicyRecordAdmin` alongside Connector/Run/AdminUser. 166 tests green,
+  ruff + mypy --strict clean.
+
+- **2026-06-17 — IMPLEMENTED: per-story fan-out F0–F8 (decision #26).** Shipped the full
+  restructure in one pass. **Engine:** `WorkflowState.stories[ticket_id]` (reducer-merged) +
+  `story_order` + `current_story`; `graph/stories.py` (build/topo-sort/next-story);
+  `graph/builder.py` rebuilt as `intake→(pm→pm_publish→rfc)?→plan_stories→story_router⇄story_build`
+  (the build team is a compiled subgraph: research→coding→reviewer→fixer→finalize, looped
+  one-story-at-a-time); `graph/nodes.py` hydrates the current story onto the flat namespaces before
+  each build agent and folds the result back into `stories[…]` (agents barely changed). **Retry:**
+  `Runner.retry_run` now resolves run-level failures (intake/pm/rfc, fork via `as_node`) **and**
+  per-story failures/regenerate (`ticket_id`+`from_step` → reset story from step, re-enter router →
+  resumes at the failed/selected story, completed stories skipped). **PM:** single (default) /
+  multiple `story_mode` (form radio + prompt branch) + post-PM per-ticket selection at the review
+  gate (decision may be `{action, stories}`). **No-dup PR:** deterministic per-ticket branch +
+  persisted `branch`/`pr_url`; Coding updates the existing PR instead of opening a new one. **DB:**
+  `StoryRecord`, `AgentRunMetric`, `AgentTask.ticket_id`, `RunRecord.story_mode` (+ PG backfills).
+  **Context-min (F7):** Chroma indexes line-ranged **chunks** (not whole files); search returns
+  `path:start-end` hits; `read_file(path, start, end)` line-range reads in both toolkits;
+  story-scoped collection. **Analytics (F8):** `make_node` records tokens(in/out)+duration+model
+  per agent/story → run-detail totals strip + per-story/stage chips, Agents-view rollups, Dashboard
+  7-day KPIs. **RFC (F6):** one per run; Markdown preview (marked + DOMPurify) + raw fallback;
+  collapse fix. **UI (F5):** per-story timeline cards (mini-pipeline, PR link, retry/regenerate
+  buttons, review), top-right PR link/dropdown. **Quality:** 166 pytest green, ruff clean, mypy
+  --strict clean (77 files). Full design + file map: `per_story_fanout_and_oversight_plan.md`.
+
+- **2026-06-17 — PLANNED: per-story fan-out, per-story oversight, RFC/UI polish (decision #26).**
+  Client brief: PM single/multiple-story toggle (single default); Dev/Research/Reviewer/Fixer run
+  only when enabled and produce **one PR per story, built one by one**, with per-PR progress on the
+  UI; **per-story retry** (resume from the failed story, no duplicate PRs) and **manual per-story
+  regenerate** (re-research / regenerate-PR / re-review / re-fix); RFC always one per run + Markdown
+  preview + collapse fix; top-right PR link(s) beside the source link. **Architecture (locked via
+  client Q&A):** the story becomes the unit of execution — `WorkflowState.stories[ticket_id]`
+  (reducer-merged) driven by a sequential `story_router`→`story_build` subgraph loop, modelled
+  **LangGraph-first** (new non-negotiable rule in `CLAUDE.md`). Deterministic per-story branch +
+  persisted `branch`/`pr_url` guarantee no duplicate PRs. Detailed design + phased build order in
+  **`docs/plan/per_story_fanout_and_oversight_plan.md`**. No code yet — plan only.
+  - **Brief #2 expansion (same day):** the per-story plan now also covers — **structured outputs**
+    stay on LangChain primitives (`with_structured_output` / `create_agent(response_format=…)`),
+    Instructor only as a documented fallback (plan §4b); **story dependency ordering** honoured by
+    `story_router` (topological `story_order`); **context minimization (Research→Fixer)** — plan §12
+    documents the current grounding (whole-file Chroma docs + 6000-char reads + accumulating tool
+    chatter) and an improvement path (chunked index + LangChain retriever/contextual-compression +
+    line-range reads + context budget + summarization middleware + story-scoped indexing; stretch:
+    diff-mode `CodeChange`, AST chunking) as **F7**; **per-story worktree cleanup** at subgraph exit
+    + on regenerate; **agent analytics** — new `AgentRunMetric` table capturing in/out tokens +
+    duration + model (captured in `make_node`), with run/story/agent/project rollups on the UI, as
+    **F8**. A better PM option added: defer single-vs-multiple to a **post-PM story selection at the
+    existing review gate** (plan §4.2). Phases extended to **F0–F8**.
+
+- **2026-06-16 (session 6) — Ticket as the unit of work + Dev runs without Research
+  (decision #25).**
+  - **Build a single ticket per run.** New `WorkflowState.ticket_id` (set at run start);
+    `brief()` returns a focused single-ticket brief (epic context + that ticket's
+    description/acceptance-criteria/deps) when set and the spec contains it, else the whole spec.
+    Wired through `Runner.start_run`, `POST /ui/runs` (new `ticket_id` form field), and persisted
+    on `RunRecord.ticket_id` (+ PG backfill). Run-creation form gained a "Build only this ticket"
+    input; the run-detail spec view gained a **Build this ticket →** button per ticket (starts a
+    fresh source-backed run scoped to that ticket id).
+  - **Dev works when Research is disabled/skipped.** Extracted worktree setup into
+    `agents/worktree.py::ensure_worktree` (shared by Research and Coding). Coding no longer requires
+    a research plan: if `state.research` has no worktree (Research disabled, manual-not-triggered,
+    or skipped) it calls `ensure_worktree` itself and builds straight from the brief (plan optional
+    in `_code`). Coding records `worktree_path`/`branch` on `CodingState`; Fixer and the graph's
+    worktree cleanup fall back to those when Research didn't set them. This lets a user disable the
+    (still-flaky) Research agent and keep shipping PRs.
+  - **Tests:** `tests/graph/test_state.py` +3 (ticket-scoped vs whole-spec brief, unknown-id
+    fallback); `tests/agents/test_coding.py` +1 (coding builds with no research plan, sets up its
+    own worktree, records branch). **150 pytest green, ruff + mypy --strict clean (74 files).**
+  - **`_extract` uses neutral `_EXTRACT_SYSTEM` (Dev agent `json_validate_failed` fix).** The
+    extraction phase (`_extract`) was reusing the agent's operational system prompt (which
+    describes tool usage: "use `read_file` and `list_files` to explore..."). Groq in JSON-schema
+    mode sees those instructions and outputs `{"name": "list_files", ...}` instead of the schema →
+    `json_validate_failed`. Fixed by using `_EXTRACT_SYSTEM` (module constant, no tool-use
+    language) as the system message in `_extract`. The operational `system` param is still
+    accepted but no longer forwarded to the model. Added `test_extract_system_is_tool_free`.
+    **151 pytest green.**
+  - **Multi-repo Docker mount (`LOCAL_REPOS_ROOT`).** `docker-compose.yml` api volumes now include
+    a second mount slot `${LOCAL_REPOS_ROOT:-/tmp}:${LOCAL_REPOS_ROOT:-/tmp}`. Set
+    `LOCAL_REPOS_ROOT` in `.env` to the common parent directory of all local clones (e.g.
+    `/Users/you/dev`) so every `projects/*.yaml` `work.local_repo_path` absolute value resolves
+    inside the container without toggling `LOCAL_REPO_PATH` between projects.
+
+- **2026-06-16 (session 5) — Retry-from-failed-step + hand-rolled explore loop (Groq
+  `tool_choice="none"` fix).**
+  - **Retry a failed run from the step that failed (decision #24).** New `Runner.retry_run(run_id,
+    from_step=None, wait=False)` + `Runner.first_failed_step()`: finds the earliest namespace with
+    an `error`, forks the run's checkpoint via `aupdate_state(as_node=<predecessor>)` so that step
+    becomes the next node, then `ainvoke(None)` drives it (and everything after) to completion. Each
+    re-run node overwrites its own namespace, so stale errors clear automatically. `POST
+    /ui/runs/{id}/retry` kicks it off in the background and redirects to the run page so a fresh SSE
+    stream shows live progress (the original stream closed on failure). Added a "Run failed at
+    <step>" banner with a **Retry from <step>** button to `_run_timeline.html`.
+  - **Fixed Groq `tool_use_failed: Tool choice is none, but model called a tool`.** `create_agent`'s
+    loop sets `tool_choice="none"` on its final synthesis turn to force a text answer, but Groq's
+    `gpt-oss-*` ignores that and calls a tool anyway → 400. Replaced the explore phase
+    (`BaseAgent._explore`) with a **hand-rolled tool loop** that only ever uses the default
+    (`auto`) tool choice: bind tools, let the model call them, feed `ToolMessage` results back, stop
+    when it returns text with no tool calls (bounded by `MAX_EXPLORE_STEPS=8`). No `create_agent`,
+    so the contradictory `tool_choice="none"` is never sent. Phase 2 (`_extract`) still uses
+    tool-free `with_structured_output`.
+  - **Tests:** `tests/graph/test_runner.py` +3 (first-failed-step + full retry-to-completion with a
+    flaky agent); `tests/agents/test_base_generate.py` +1 (explore loop executes a tool call, feeds
+    it back, then extracts). **146 pytest green, ruff + mypy --strict clean (73 files).**
+  - **Follow-up fix:** `retry_run` now flips `status` back to `"running"` in the same
+    `aupdate_state` call, so the "Run failed" banner + Retry button disappear the instant a retry
+    starts (previously the reset cleared the step error while `status` stayed `"failed"`, leaving a
+    stale "A step did not complete" banner mid-retry). The banner also only renders when a failed
+    step is actually identified.
+
+- **2026-06-16 (session 4) — Two-phase structured generation (Groq-safe) + RFC guardrail
+  resilience.**
+  - **Root cause of the research-agent `json_validate_failed` loop.** Sending **tools +
+    `response_format`** in one request puts Groq's `gpt-oss-*` (via LiteLLM) into JSON-schema mode,
+    so the model's tool call (`{"tool":"list_directory",…}`) gets validated against the *final*
+    `ImplementationPlan` schema and the request 400s. The earlier tool-free retry was a band-aid
+    that also stripped all repo grounding.
+  - **Fix — `BaseAgent.generate` is now two-phase for tool-using agents:** (1) **explore** — a
+    `create_agent` tool loop with **no** `response_format` (native tool-calling works normally; the
+    model reads files/greps and ends with a free-text conclusion); (2) **extract** — a separate
+    tool-free `with_structured_output` call that folds the exploration notes into the prompt and
+    returns the typed object. Tools and the response schema are never in the same request, so the
+    Groq conflict disappears *and* grounding is preserved. No-tool agents keep the single-call
+    `create_agent(response_format=…)` path. New `_explore()` / `_extract()` helpers; the error
+    handler now falls back to a tool-free `_extract` from the brief alone on any parse/validation
+    failure. Added `tests/agents/test_base_generate.py` (2 tests) covering both paths.
+  - **RFC guardrail false-positives no longer kill the run.** The LiteLLM content-safety guardrail
+    blocked an RFC on a `prompt_injection_data_exfiltration` match ("expose + credentials") in the
+    brief. RFC is an opt-in, non-blocking design doc, so `RFCAgent.run` now catches
+    `GuardrailBlockedError` and records a skip note, letting the run continue to research/build.
+  - **142 pytest green, ruff + mypy --strict clean (73 files).**
+
+- **2026-06-16 (session 3) — Five user-reported fixes: RFC visibility, agent enable/disable,
+  ONNX cache, Groq parse errors.**
+  - **Agent enable/disable now actually works (two bugs).** (1) The config form's `enabled`
+    checkbox used `Form(default="on")`, but an unchecked HTML checkbox submits *nothing* — so
+    "off" was always read as "on". Changed to `Form(default="")`. (2) `agent_detail_view` and
+    `_agent_rows` read policy from **YAML only** (`project.agent_policy`), so a saved DB override
+    never showed in the UI. Both now call `resolve_policy` (DB > YAML > default); `_agent_rows`
+    became async + takes a session.
+  - **Single source of truth for agent policy.** Refactored `BaseAgent`: new
+    `_resolve_policy(state) → (project, policy)` centralises DB>YAML>default resolution;
+    `_trigger_gate(state, *, resolved=...)` reuses it. RFC previously loaded policy twice (gate
+    via `base.load_project`, opt-in via `rfc.load_project`) and its opt-in guard checked `trigger`
+    but **not** `enabled` — so a disabled RFC still ran. RFC now resolves once and checks the
+    opt-in (`trigger==auto`) *before* the gate (RFC has no manual-trigger UI, so `!=auto` = skip,
+    never an interrupt).
+  - **RFC is now findable + visible (was generated into the void).** The RFC agent now writes the
+    Markdown to `<runtime_dir>/rfc/<run_id>.md` and carries `doc_ref`/`title` in `RFCState`. Added
+    an "RFC — design doc" stage to the run-timeline pipeline and a collapsible RFC section showing
+    the title, file/URL ref, and full document.
+  - **ONNX embedding model no longer re-downloads (~79 MB each restart).** Chroma's default
+    embedding function runs **client-side** — i.e. in the ASH `api` container, not the chroma
+    server. The cache volume was mounted on the wrong service; moved
+    `chroma-onnx:/root/.cache/chroma` to the `api` service.
+  - **Groq `output_parse_failed` now caught for retry.** The model sometimes emits free-text
+    reasoning where the ReAct/structured-output parser expects a tool call or final JSON; added
+    `output_parse_failed` / `parsing failed` / `could not be parsed` to `generate()`'s
+    direct-structured-output fallback condition so the research agent degrades instead of crashing.
+  - **140 pytest green, ruff + mypy --strict clean (73 files).** Updated `test_rfc.py` (patches
+    `ash.agents.base.load_project`, autouse fixture forces the DB-down fallback for hermetic unit
+    tests) and `test_routes_helpers.py` (`_agent_rows` now async with an in-memory SQLite session).
+
+- **2026-06-16 (session 2) — Token efficiency, reliability, and config fixes.**
+  - **Per-agent LLM routing (base_url + api_key overrides):** `AgentModelOverride` gained
+    `base_url` and `api_key` fields; `settings.effective_api_key(agent)` returns the per-agent key
+    if set, falling back to the provider default. `AGENT_REVIEWER__BASE_URL` /
+    `AGENT_REVIEWER__API_KEY` route the Reviewer to Google AI Studio without touching other agents.
+    `env_file` changed to an absolute path (`REPO_ROOT / ".env"`) so it's CWD-immune.
+  - **Token efficiency — no more full context dumps:** Research agent no longer pre-dumps the repo
+    tree into the prompt; the agent explores via `list_directory` → `grep_code` → `read_file` tools
+    (Claude Code–style). Coding agent similarly removed the pre-loaded tree + initial file contents.
+    Reviewer agent truncates each changed file to 4 000 chars before sending to the LLM.
+  - **`_trigger_gate` async + enabled check + DB overrides:** `BaseAgent._trigger_gate` made async;
+    now calls `resolve_policy(session, project, agent_name)` to merge DB override > YAML > default.
+    Checks `policy.enabled` before the trigger check — disabled agents now self-skip correctly.
+    All four call sites updated (research, coding, reviewer, fixer).
+  - **RFC enable/disable fixed:** RFC agent now calls `await self._trigger_gate(state)` (picks up DB
+    overrides) then an extra `resolve_policy` check for `trigger != "auto"` to enforce opt-in
+    semantics. Enabling/disabling from the UI now works correctly.
+  - **Groq retry path:** `generate()` retry (on tool-validation / json_validate_failed errors) now
+    calls `model.with_structured_output(schema).ainvoke(messages)` directly — bypasses `create_agent`
+    entirely, avoiding Groq's strict tool-schema enforcement on the retry.
+  - **LangGraph msgpack allowlist complete:** `checkpointer.py` now registers all ASH Pydantic
+    models (`Epic`, `TechnicalSpec`, `Ticket`, `Risk`, `FileEdit`, `ReviewFinding`, `RFCDocument`)
+    and all `str, Enum` types (`TicketType`, `Severity`, `EditAction`, `ReviewSeverity`,
+    `ReviewVerdict`). Deserialization warnings eliminated.
+  - **Chroma ONNX model cache:** `docker-compose.yml` gained a `chroma-onnx` named volume mounted
+    at `/root/.cache/chroma` in the Chroma service so the embedding model persists across restarts.
+  - **Agent "in_progress" status in UI:** `_run_timeline.html` stage macro accepts an `agent_key`
+    param and shows a pulsing ◉ indicator when the DB `AgentTask` status is `in_progress`. Routes
+    and SSE generator pass `task_statuses` dict on every render tick.
+  - **Claude Code–style harness added as future capability** to Phase 5 / backlog (§5).
+  - **mypy --strict clean: 73 source files.**
+
+- **2026-06-16 — Agent task dispatch system (D1–D4 + UI1): per-agent task queue, background
+  dispatcher, and agent detail pages.**
+  **D1 (DB models):** `AgentTask` table (status: pending/in_progress/completed/failed/cancelled/
+  scheduled, retry tracking, result_ref, timestamps) + `AgentPolicyRecord` table (DB overrides for
+  trigger/enabled/concurrency_limit/daily_quota/max_retries/schedule_cron). `AgentPolicy` in
+  `settings.py` extended with the new dispatch fields. Full CRUD in `db/tasks.py`.
+  **D2 (HITL disambiguation):** `Runner.get_run` now distinguishes three interrupt types
+  (`spec_review` / `manual_trigger` / `merge_approval`) and sets `pending_review` / `pending_trigger`
+  / `pending_merge` flags. `_run_timeline.html` gained two new HITL gate blocks (trigger + merge).
+  Approvals page shows colour-coded gate-type badges.
+  **D3 (task lifecycle in pipeline):** `make_node` in `graph/nodes.py` accepts `node_name`; each node
+  creates/updates `AgentTask` rows as best-effort side-effects. Mapping: intake→creates pm task;
+  pm_publish→completes pm task + creates research task; rfc/research/coding/reviewer/fixer each
+  complete their own task and create the next one. `builder.py` passes `node_name` to each
+  `make_node` call.
+  **D4 (background dispatcher):** `graph/dispatcher.py` — `DispatchService.tick()` scans all pending
+  tasks every 10 s, respects trigger='auto', concurrency_limit, daily_quota, schedule_cron
+  (croniter), max_retries; resumes runs via `Runner.resume_run(run_id, "run")`. Wired into FastAPI
+  lifespan in `api/app.py`. `croniter>=2.0` added to dependencies.
+  **UI1 (agent detail pages):** `/ui/agents/{name}` — per-agent page with stats bar (pending /
+  in_progress / completed / failed / success_rate), filterable task list (Trigger/Cancel buttons per
+  row), and an editable config panel saving to `AgentPolicyRecord` (DB override) with a reset-to-YAML
+  button. Agents overview cards annotated with pending/running badges; cards link to detail pages.
+  New routes: `GET /ui/agents/{name}`, `POST /ui/agents/{name}/config`, `POST
+  /ui/agents/{name}/config/reset`, `POST /ui/tasks/{id}/trigger`, `POST /ui/tasks/{id}/cancel`.
+  **Also fixed (same session):** `.env` had a mangled line where `LOCAL_REPO_PATH` was appended to
+  `POSTGRES_DSN` without newline, leaving it empty and causing Research/Spike to skip despite
+  `local_repo_path` being set in plane.yaml. `docker-compose.yml` got a bind-mount
+  `${LOCAL_REPO_PATH:-/tmp}:${LOCAL_REPO_PATH:-/tmp}` so the host clone is visible inside the
+  container.
+  **Run timeline now shows "running" state:** `_run_timeline.html` `stage()` macro gained an
+  `agent_key` param; routes pass `task_statuses` (agent_name→status dict from `list_tasks_for_run`)
+  to all timeline render paths (SSE stream, initial load, approve/reject/trigger responses).
+  When `AgentTask.status == "in_progress"` and the agent has no output yet, the stage shows a
+  pulsing ◉ "running" indicator instead of jumping directly from "pending" to "done".
+  Verified: ruff + mypy --strict clean (**73 source files**), **140 tests green**.
+
+- **2026-06-15 — Research sinks (A5) + connectors page port.** The Research agent now publishes its
+  output: `agents/research_doc.py` renders the `ImplementationPlan` to Markdown and
+  `publish_research_doc()` writes it to a local file (default), posts it as a comment on the source
+  connector's issue, or skips — selected by `ProjectConfig.research_sink` (`file`/`comment`/`none`);
+  `ResearchState.doc_ref` records where it went; publishing is best-effort. Connectors UI page ported
+  to the design system with per-row **MCP/built-in** + role badges and an inline **validation status**
+  (from `validate_connector`) showing incoherent rows, plus a concise setup guide. Verified: ruff +
+  mypy --strict clean (69 files), **110 tests green** (+5 research-doc).
+
+- **2026-06-15 — Work board + connector coherence checks + startup column backfill.** Added the
+  **Work board** (`/ui/work`, `work_board.html`): recent runs as cards in status columns
+  (In progress / Awaiting review / Done / Failed); promoted from the sidebar's "soon" list.
+  **Connector coherence (C1 slice):** `integrations/service.validate_connector` enforces the role/MCP
+  "together checks" the brief asked for — `is_default_sink ⇒ is_sink`, MCP (`transport='http'`) ⇒
+  `base_url`, and source/sink **kind-capability** (source ∈ github/jira/plane, sink ∈ file/jira/plane,
+  matching `registry`/`build_sink`); `create_connector` now takes `transport` and raises `ValueError`
+  on an incoherent combo. **Migration shim:** `init_db()` runs idempotent `ADD COLUMN IF NOT EXISTS`
+  backfills (Postgres) so DBs predating the schema change get `run_records.status`/`task_sink_id` on
+  startup — fixed a live `column run_records.task_sink_id does not exist` 500. Verified: ruff + mypy
+  --strict clean, **105 tests green** (+7 validation), all templates render offline, routes register.
+
+- **2026-06-15 — Reviewer + Fixer agents built, spec persistence, per-agent trigger config, and the
+  Jira-style UI (U0–U3) shipped.** Executed the §13 roadmap's first block.
+  **Agents:** `ReviewerAgent` (was a stub) now does a single deep `create_agent` review →
+  `CodeReview` (new schema: `ReviewSeverity` nit/low/medium/high/critical, `ReviewFinding`,
+  `ReviewVerdict`), posts the review via `gh` when a PR exists, and merges only when
+  `autonomy.auto_merge_on_approve` is set **and** the merge gate allows it (else awaits a human).
+  `FixerAgent` (was a stub) reuses the Dev agent's apply/commit/push on the same worktree to address
+  blocking findings, bounded by `MAX_FIX_ITERATIONS`, and refreshes the PR description. Worktree
+  cleanup moved from Coding to the `merge` node so the worktree survives for Reviewer/Fixer. Coding's
+  `_apply_change` is now the shared public `apply_change`; commits/PR titles are ticket-number
+  prefixed. `pr.py` gained `comment_pr`/`review_pr`/`edit_pr_body`/`merge_pr`.
+  **Persistence (A0):** new `SpecRecord` table (one spec per run, denormalized title/summary for
+  search) written best-effort by PM; `RunRecord` gained `task_sink_id` + `status`; `Runner` syncs the
+  final status onto the record. `db/runs.py` adds `persist_spec_record`/`update_spec_ticket_refs`/
+  `update_run_status`/`search_spec_records`.
+  **Config (A4):** `AgentPolicy{trigger: auto|manual, enabled}` + `agents:` map on `ProjectConfig`
+  (`agent_policy()` helper); `Autonomy.auto_merge_on_approve`; `KNOWN_AGENTS`. Auto-trigger *dispatch*
+  is still TODO — only the policy/UI surface landed.
+  **UI (U0–U3):** rebuilt the shell to a Jira-style sidebar+topbar on **Tailwind + HTMX + Alpine**
+  (CDN); new pages — live **run detail** (SSE `/ui/runs/{id}/events` + htmx swap, inline Approve/Reject
+  gate posting to `/resume`), **Approvals** queue, searchable+paginated **PM runs** (+ spec detail),
+  and **Agents** overview (trigger/enabled/model/HITL per project, RFC placeholder). Dashboard, runs
+  list, and new-run form ported to the design system; a legacy-class shim covers the still-bespoke
+  connectors page. Verified: ruff + mypy --strict clean (src), **98 tests green** (+10), all templates
+  render offline, app constructs and routes register. Live Postgres/LLM/`gh` paths still need real
+  credentials. **Schema migration:** `init_db()` now runs idempotent `ADD COLUMN IF NOT EXISTS`
+  backfills (Postgres only, `db/base.py`) so DBs predating this change pick up the new
+  `run_records.status`/`task_sink_id` columns on startup (the `spec_records` table is created by
+  `create_all`) — fixes the `column run_records.task_sink_id does not exist` 500. Proper Alembic
+  still pending. **Remaining (next):** C1 connectors overhaul, A1 Dev tool-loop (P2), A4 auto-dispatch,
+  A5 research sinks, P4b HITL middleware, Work-board view, RFC.
+
+- **2026-06-15 — Full team spec + connector overhaul + Jira-style UI plan (decisions #22, #23).**
+  Captured the client brief for the whole agent roster (PM/Research/Dev/Reviewer/Fixer/RFC) with
+  per-agent inputs, destinations, tools, response schemas, HITL gates, and a new cross-cutting
+  **trigger mode** (`auto`/`manual`) requirement — written into `agent_runtime_and_connectors_plan.md`
+  §10. Added a **connector overhaul** plan (§11): MCP-first with legacy httpx as visible backup,
+  discriminated per-kind Pydantic config (no free-form JSON), coherent role/MCP validators, connection
+  health check, `task_sink_id` persisted on `RunRecord`. Added a **Jira-style UI overhaul** plan (§12):
+  server-rendered **HTMX + Tailwind + Alpine** (decided over a React SPA — keeps one Python codebase,
+  no Node build target), sidebar+topbar IA, shared design-system macros replacing inline CSS, SSE-driven
+  live run status, dedicated PM-runs (searchable/paginated), Agents, Connectors, and Approvals sections.
+  Added the **execution roadmap** (§13): chosen order is **UI foundation first → agents → connectors,
+  interleaved** (U0–U3, C1, A0–A5, P4b, RFC last), folding the old §5 P2–P6 into it. Build started this
+  turn at U0 (UI foundation). No agent-loop behaviour changed by the planning pass.
 
 - **2026-06-15 — Spec-quality rule tightening (second pass).** Re-ran the same requirement through
   PM post-hardening; the structural issues (cycles, dep graph) were fixed, but four prompt-level gaps

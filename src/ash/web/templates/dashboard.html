@@ -1,44 +1,124 @@
 {% extends "base.html" %}
 {% block title %}Dashboard{% endblock %}
+{% block breadcrumb %}Dashboard{% endblock %}
 {% block body %}
-<h1>Dashboard</h1>
 
-<div class="card">
-  <h2>Connectors ({{ connectors|length }})</h2>
-  {% if connectors %}
-    <table>
-      <tr><th>Name</th><th>Kind</th><th>Source</th><th>Sink</th><th>Enabled</th></tr>
-      {% for c in connectors %}
-        <tr>
-          <td>{{ c.name }}</td><td><span class="pill">{{ c.kind.value }}</span></td>
-          <td>{{ "✓" if c.is_source else "—" }}</td>
-          <td>{{ "✓ (default)" if c.is_default_sink else ("✓" if c.is_sink else "—") }}</td>
-          <td>{{ "✓" if c.enabled else "—" }}</td>
-        </tr>
-      {% endfor %}
-    </table>
+<div class="flex items-center justify-between mb-6">
+  <div>
+    <h1 class="text-xl font-semibold">Dashboard</h1>
+    <p class="text-sm text-muted mt-0.5">Your agentic software house at a glance.</p>
+  </div>
+  <a href="/ui/runs/new"
+     class="bg-accent text-bg font-semibold text-sm rounded-lg px-4 h-9 inline-flex items-center hover:brightness-110">
+    Start a run
+  </a>
+</div>
+
+<!-- KPI strip -->
+{% set wm = week_metrics or {} %}
+<div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
+  {% macro kpi(label, value, tone, sub="") %}
+    <div class="bg-surface border border-border rounded-xl p-4">
+      <div class="text-2xl font-semibold {{ tone }}">{{ value }}</div>
+      <div class="text-xs uppercase tracking-wide text-muted mt-1">{{ label }}</div>
+      {% if sub %}<div class="text-[11px] text-muted/60 mt-0.5">{{ sub }}</div>{% endif %}
+    </div>
+  {% endmacro %}
+  {{ kpi("Recent runs", runs|length, "text-fg") }}
+  {{ kpi("Connectors", connectors|length, "text-fg") }}
+  {% if wm.total_tokens %}
+    {{ kpi("Tokens · 7d", "{:,}".format(wm.total_tokens), "text-accent",
+           "↑%s ↓%s"|format("{:,}".format(wm.prompt_tokens or 0), "{:,}".format(wm.completion_tokens or 0))) }}
+    {{ kpi("Agent time · 7d", "%.0fs"|format((wm.duration_ms or 0)/1000), "text-accent",
+           "%s agent run(s)"|format(wm.runs or 0)) }}
   {% else %}
-    <p class="muted">No connectors yet. Add one in the <a href="/admin" target="_blank">Admin portal</a>.</p>
+    {{ kpi("Sources", connectors|selectattr("is_source")|list|length, "text-accent") }}
+    {{ kpi("Sinks", connectors|selectattr("is_sink")|list|length, "text-accent") }}
   {% endif %}
 </div>
 
-<div class="card">
-  <h2>Recent runs</h2>
-  {% if runs %}
-    <table>
-      <tr><th>Run</th><th>Project</th><th>Item</th><th>Mode</th><th>When</th></tr>
-      {% for r in runs %}
-        <tr>
-          <td><a href="/ui/runs/{{ r.run_id }}">{{ r.run_id[:8] }}</a></td>
-          <td>{{ r.project }}</td><td>{{ r.item_id }}</td>
-          <td><span class="pill">{{ r.intake_mode }}</span></td>
-          <td class="muted">{{ r.created_at.strftime("%Y-%m-%d %H:%M") }}</td>
-        </tr>
-      {% endfor %}
-    </table>
-  {% else %}
-    <p class="muted">No runs yet.</p>
-  {% endif %}
-  <p style="margin-top:1rem"><a class="btn" href="/ui/runs/new">Start a run</a></p>
+<div class="grid lg:grid-cols-3 gap-4">
+
+  <!-- Recent runs (spans 2 cols) -->
+  <section class="lg:col-span-2 bg-surface border border-border rounded-xl">
+    <header class="flex items-center justify-between px-5 h-12 border-b border-border">
+      <h2 class="text-sm font-semibold text-fg">Recent runs</h2>
+      <a href="/ui/runs" class="text-xs text-accent hover:underline">View all →</a>
+    </header>
+    {% if runs %}
+      <table class="w-full text-sm">
+        <thead>
+          <tr class="text-left text-muted text-xs uppercase tracking-wide">
+            <th class="font-medium px-5 py-2">Run</th>
+            <th class="font-medium px-3 py-2">Project</th>
+            <th class="font-medium px-3 py-2">Item</th>
+            <th class="font-medium px-3 py-2">Mode</th>
+            <th class="font-medium px-5 py-2 text-right">When</th>
+          </tr>
+        </thead>
+        <tbody>
+        {% for r in runs %}
+          {% set tone = {"raw_to_spec":"bg-accent/15 text-accent",
+                         "spec_ready":"bg-ok/15 text-ok",
+                         "raw_to_dev":"bg-warn/15 text-warn"}.get(r.intake_mode, "bg-border text-muted") %}
+          <tr class="border-t border-border/60 hover:bg-elevate/40">
+            <td class="px-5 py-2.5">
+              <a href="/ui/runs/{{ r.run_id }}" class="font-mono text-accent hover:underline">{{ r.run_id[:8] }}</a>
+            </td>
+            <td class="px-3 py-2.5">{{ r.project }}</td>
+            <td class="px-3 py-2.5 text-muted">{{ r.item_id }}</td>
+            <td class="px-3 py-2.5">
+              <span class="text-xs px-2 py-0.5 rounded-full {{ tone }}">{{ r.intake_mode }}</span>
+            </td>
+            <td class="px-5 py-2.5 text-right text-muted whitespace-nowrap">{{ r.created_at.strftime("%b %d, %H:%M") }}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <div class="px-5 py-10 text-center text-muted text-sm">
+        No runs yet. <a href="/ui/runs/new" class="text-accent hover:underline">Start your first run →</a>
+      </div>
+    {% endif %}
+  </section>
+
+  <!-- Connectors -->
+  <section class="bg-surface border border-border rounded-xl">
+    <header class="flex items-center justify-between px-5 h-12 border-b border-border">
+      <h2 class="text-sm font-semibold text-fg">Connectors</h2>
+      <a href="/ui/connectors" class="text-xs text-accent hover:underline">Manage →</a>
+    </header>
+    {% if connectors %}
+      <ul class="divide-y divide-border/60">
+        {% for c in connectors %}
+          <li class="flex items-center gap-3 px-5 py-3">
+            <span class="w-2 h-2 rounded-full {{ 'bg-ok' if c.enabled else 'bg-muted/40' }}"
+                  title="{{ 'enabled' if c.enabled else 'disabled' }}"></span>
+            <div class="min-w-0 flex-1">
+              <div class="text-sm truncate">{{ c.name }}</div>
+              <div class="text-xs text-muted">{{ c.kind.value }}</div>
+            </div>
+            <div class="flex gap-1">
+              {% if c.is_source %}<span class="text-[10px] px-1.5 py-0.5 rounded bg-accent/15 text-accent">source</span>{% endif %}
+              {% if c.is_default_sink %}<span class="text-[10px] px-1.5 py-0.5 rounded bg-ok/15 text-ok">default sink</span>
+              {% elif c.is_sink %}<span class="text-[10px] px-1.5 py-0.5 rounded bg-ok/15 text-ok">sink</span>{% endif %}
+            </div>
+          </li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <div class="px-5 py-10 text-center text-muted text-sm">
+        No connectors yet.<br>
+        <a href="/admin/connector/create" class="text-accent hover:underline">Add one →</a>
+      </div>
+    {% endif %}
+  </section>
 </div>
+
+<!-- Planned-section hint (matches sidebar "soon" items) -->
+<p class="mt-6 text-xs text-muted/70">
+  Work board, PM runs, Agents and Approvals views are planned next — see the roadmap in
+  <span class="font-mono">docs/plan/agent_runtime_and_connectors_plan.md</span> §13.
+</p>
+
 {% endblock %}

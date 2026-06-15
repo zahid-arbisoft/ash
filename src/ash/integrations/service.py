@@ -14,6 +14,30 @@ from ash.integrations.base import IssueProvider
 from ash.integrations.mcp import is_mcp, load_mcp_tools
 from ash.integrations.registry import build_provider
 
+# Which kinds can actually act in each role (must match registry.build_provider / sinks.build_sink).
+SOURCE_KINDS = {ConnectorKind.github, ConnectorKind.jira, ConnectorKind.plane}
+SINK_KINDS = {ConnectorKind.file, ConnectorKind.jira, ConnectorKind.plane}
+
+
+def validate_connector(connector: Connector) -> list[str]:
+    """Return human-readable coherence problems for a connector's role/MCP toggles (empty = ok).
+
+    Catches the incoherent combinations at create-time instead of failing mid-run (plan §11.1):
+    a default sink that isn't a sink, an MCP connector without a URL, or a role the kind can't fill.
+    """
+    issues: list[str] = []
+    if connector.is_default_sink and not connector.is_sink:
+        issues.append("is_default_sink requires is_sink (a default sink must be a sink)")
+    if is_mcp(connector) and not connector.base_url:
+        issues.append("MCP connectors (transport='http') require a base_url (the server endpoint)")
+    if connector.is_source and connector.kind not in SOURCE_KINDS:
+        kinds = ", ".join(sorted(k.value for k in SOURCE_KINDS))
+        issues.append(f"kind '{connector.kind.value}' cannot be an issue source (use: {kinds})")
+    if connector.is_sink and connector.kind not in SINK_KINDS:
+        kinds = ", ".join(sorted(k.value for k in SINK_KINDS))
+        issues.append(f"kind '{connector.kind.value}' cannot be a ticket sink (use: {kinds})")
+    return issues
+
 
 async def list_connectors(session: AsyncSession) -> list[Connector]:
     result = await session.execute(select(Connector).order_by(Connector.name))
@@ -32,6 +56,7 @@ async def create_connector(
     secret: str = "",
     config: dict[str, Any] | None = None,
     base_url: str | None = None,
+    transport: str | None = None,
     is_source: bool = False,
     is_sink: bool = False,
     is_default_sink: bool = False,
@@ -43,11 +68,15 @@ async def create_connector(
         secret=secret,
         config=config or {},
         base_url=base_url,
+        transport=transport,
         is_source=is_source,
         is_sink=is_sink,
         is_default_sink=is_default_sink,
         enabled=enabled,
     )
+    problems = validate_connector(connector)
+    if problems:
+        raise ValueError("invalid connector: " + "; ".join(problems))
     session.add(connector)
     await session.commit()
     await session.refresh(connector)

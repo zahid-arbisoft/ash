@@ -1,0 +1,97 @@
+{% extends "base.html" %}
+{% block title %}Spec {{ run_id[:8] }}{% endblock %}
+{% block breadcrumb %}<a href="/ui/pm-runs" class="hover:text-fg">PM runs</a> / {{ run_id[:8] }}{% endblock %}
+{% block body %}
+
+{% if not rec %}
+<div class="bg-surface border border-border rounded-xl px-5 py-12 text-center text-muted">
+  No persisted spec for this run.
+  <a href="/ui/runs/{{ run_id }}" class="text-accent hover:underline">View the live run →</a>
+</div>
+{% else %}
+{% set spec = rec.spec_json %}
+
+<div class="flex items-center justify-between mb-5">
+  <div>
+    <h1 class="text-xl font-semibold">{{ spec.epic.title }}</h1>
+    <p class="text-sm text-muted mt-0.5">{{ rec.project }} · {{ rec.item_id }} · {{ rec.created_at.strftime("%b %d, %Y %H:%M") }}</p>
+  </div>
+  <a href="/ui/runs/{{ run_id }}" class="text-sm text-accent hover:underline">Live run →</a>
+</div>
+
+<section class="bg-surface border border-border rounded-xl p-5 mb-4">
+  <p class="text-sm text-muted mb-3">{{ spec.epic.summary }}</p>
+  <div class="text-sm"><span class="text-xs uppercase tracking-wide text-muted">Business goal</span>
+    <p class="text-muted mt-0.5">{{ spec.epic.business_goal }}</p></div>
+  {% if spec.epic.acceptance_criteria %}
+  <div class="text-sm mt-3">
+    <span class="text-xs uppercase tracking-wide text-muted">Acceptance criteria</span>
+    <ul class="list-disc list-inside space-y-0.5 text-muted mt-1">
+      {% for a in spec.epic.acceptance_criteria %}<li>{{ a }}</li>{% endfor %}
+    </ul>
+  </div>
+  {% endif %}
+</section>
+
+<section class="bg-surface border border-border rounded-xl p-5 mb-4">
+  <h2 class="text-sm font-semibold text-fg mb-2">Technical approach</h2>
+  <p class="text-sm text-muted">{{ spec.technical_spec.approach }}</p>
+  {% if spec.technical_spec.affected_areas %}
+  <p class="text-sm text-muted mt-2"><span class="text-fg">Affected areas:</span> {{ spec.technical_spec.affected_areas|join(", ") }}</p>
+  {% endif %}
+  <p class="text-sm text-muted mt-2"><span class="text-fg">Testing:</span> {{ spec.technical_spec.testing_strategy }}</p>
+</section>
+
+<section class="mb-4">
+  <h2 class="text-sm font-semibold mb-3">Tickets ({{ spec.tickets|length }})</h2>
+  <div class="grid sm:grid-cols-2 gap-3">
+    {% for t in spec.tickets %}
+    <div class="bg-surface border border-border rounded-lg p-4">
+      <div class="flex items-center gap-2 mb-1">
+        <span class="font-mono text-xs text-accent">{{ t.id }}</span>
+        <span class="text-[10px] px-1.5 py-0.5 rounded bg-border text-muted">{{ t.type }}</span>
+        {% if t.needs_research %}<span class="text-[10px] px-1.5 py-0.5 rounded bg-warn/15 text-warn">spike</span>{% endif %}
+        {% if t.estimate %}<span class="text-[10px] text-muted ml-auto">{{ t.estimate }}</span>{% endif %}
+      </div>
+      <div class="text-sm font-medium">{{ t.title }}</div>
+      <p class="text-xs text-muted mt-1">{{ t.description }}</p>
+      {% if t.acceptance_criteria %}
+      <ul class="list-disc list-inside text-xs text-muted mt-2 space-y-0.5">
+        {% for a in t.acceptance_criteria %}<li>{{ a }}</li>{% endfor %}
+      </ul>
+      {% endif %}
+      {% if t.dependencies %}<div class="text-[11px] text-muted mt-2">depends on: {{ t.dependencies|join(", ") }}</div>{% endif %}
+    </div>
+    {% endfor %}
+  </div>
+</section>
+
+{% if spec.risk_assessment %}
+<section class="bg-surface border border-border rounded-xl p-5 mb-4">
+  <h2 class="text-sm font-semibold text-fg mb-2">Risks</h2>
+  <ul class="space-y-2 text-sm">
+    {% for r in spec.risk_assessment %}
+    {% set sv = {"high":"text-danger","medium":"text-warn","low":"text-muted"}.get(r.severity, "text-muted") %}
+    <li><span class="font-medium {{ sv }}">[{{ r.severity }}]</span> {{ r.description }} <span class="text-muted">— {{ r.mitigation }}</span></li>
+    {% endfor %}
+  </ul>
+</section>
+{% endif %}
+
+{% if spec.open_questions %}
+<section class="border border-warn/40 bg-warn/5 rounded-xl p-5 mb-4">
+  <h2 class="text-sm font-semibold text-warn mb-2">Open questions</h2>
+  <ul class="list-disc list-inside space-y-0.5 text-muted text-sm">
+    {% for q in spec.open_questions %}<li>{{ q }}</li>{% endfor %}
+  </ul>
+</section>
+{% endif %}
+
+{% if rec.ticket_refs %}
+<p class="text-sm text-muted">Pushed tickets:
+  {% for ref in rec.ticket_refs %}<span class="text-accent">{{ ref }}</span>{% if not loop.last %}, {% endif %}{% endfor %}
+</p>
+{% endif %}
+
+{% endif %}
+{% endblock %}

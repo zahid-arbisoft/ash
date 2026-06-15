@@ -32,6 +32,7 @@ dependencies = [
     "pypdf>=5.0",
     "docx2txt>=0.8",
     "chromadb>=0.5,<2.0",
+    "croniter>=2.0",
 ]
 
 [project.optional-dependencies]

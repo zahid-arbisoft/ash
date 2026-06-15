@@ -8,7 +8,16 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 import ash.admin._compat  # noqa: F401 — applies the sqladmin/wtforms boolean-widget shim on import
 from ash.admin.auth import AdminAuth
-from ash.admin.views import AdminUserAdmin, ConnectorAdmin, RunRecordAdmin
+from ash.admin.views import (
+    AdminUserAdmin,
+    AgentPolicyRecordAdmin,
+    AgentRunMetricAdmin,
+    AgentTaskAdmin,
+    ConnectorAdmin,
+    RunRecordAdmin,
+    SpecRecordAdmin,
+    StoryRecordAdmin,
+)
 from ash.config.settings import Settings
 
 
@@ -21,5 +30,10 @@ def setup_admin(app: FastAPI, engine: AsyncEngine, settings: Settings) -> Admin:
     admin = Admin(app, engine, authentication_backend=auth, title="ASH Admin")
     admin.add_view(ConnectorAdmin)
     admin.add_view(RunRecordAdmin)
+    admin.add_view(SpecRecordAdmin)
+    admin.add_view(StoryRecordAdmin)
+    admin.add_view(AgentTaskAdmin)
+    admin.add_view(AgentRunMetricAdmin)
+    admin.add_view(AgentPolicyRecordAdmin)
     admin.add_view(AdminUserAdmin)
     return admin

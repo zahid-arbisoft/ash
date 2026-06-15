@@ -10,12 +10,13 @@ from ash.graph.state import WorkflowState
     "agent_cls,key",
     [(ReviewerAgent, "reviewer"), (FixerAgent, "fixer")],
 )
-async def test_stub_agent_annotates_its_namespace(agent_cls, key):
+async def test_agent_skips_gracefully_with_no_work(agent_cls, key):
+    """With nothing to review/fix, each agent annotates a skip note instead of crashing."""
     agent = agent_cls(Settings())
     state = WorkflowState(run_id="r1", project="plane", item_id="42")
     update = await agent.run(state)
     assert key in update
-    assert update[key]["note"]
+    assert "skipped" in update[key]["note"]
 
 
 async def test_research_skips_without_local_clone(monkeypatch):

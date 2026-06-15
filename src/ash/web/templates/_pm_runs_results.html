@@ -1,0 +1,55 @@
+{# PM-runs results table + pagination. Swapped into #pm-results on search/paginate. #}
+{% if rows %}
+<table class="w-full text-sm">
+  <thead>
+    <tr class="text-left text-muted text-xs uppercase tracking-wide">
+      <th class="font-medium px-5 py-2">Run</th>
+      <th class="font-medium px-3 py-2">Epic</th>
+      <th class="font-medium px-3 py-2">Project</th>
+      <th class="font-medium px-3 py-2 text-center">Tickets</th>
+      <th class="font-medium px-3 py-2 text-center">Spikes</th>
+      <th class="font-medium px-5 py-2 text-right">When</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for r in rows %}
+    <tr class="border-t border-border/60 hover:bg-elevate/40">
+      <td class="px-5 py-2.5">
+        <a href="/ui/pm-runs/{{ r.run_id }}" class="font-mono text-accent hover:underline">{{ r.run_id[:8] }}</a>
+      </td>
+      <td class="px-3 py-2.5 max-w-md">
+        <div class="truncate">{{ r.epic_title or "(untitled)" }}</div>
+        <div class="text-xs text-muted truncate">{{ r.summary }}</div>
+      </td>
+      <td class="px-3 py-2.5 text-muted">{{ r.project }} · {{ r.item_id }}</td>
+      <td class="px-3 py-2.5 text-center">{{ r.ticket_count }}</td>
+      <td class="px-3 py-2.5 text-center">{% if r.spike_count %}<span class="text-warn">{{ r.spike_count }}</span>{% else %}—{% endif %}</td>
+      <td class="px-5 py-2.5 text-right text-muted whitespace-nowrap">{{ r.created_at.strftime("%b %d, %H:%M") }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+{% if pages > 1 %}
+<div class="flex items-center justify-between px-5 py-3 border-t border-border text-sm">
+  <span class="text-muted">{{ total }} spec(s)</span>
+  <div class="flex gap-1">
+    {% for p in range(1, pages + 1) %}
+      {% if p == page %}
+        <span class="px-2.5 py-1 rounded bg-accent text-bg font-medium">{{ p }}</span>
+      {% else %}
+        <a hx-get="/ui/pm-runs?page={{ p }}&q={{ q }}&project={{ filter_project }}"
+           hx-target="#pm-results" hx-swap="innerHTML"
+           href="/ui/pm-runs?page={{ p }}&q={{ q }}&project={{ filter_project }}"
+           class="px-2.5 py-1 rounded text-muted hover:text-fg hover:bg-elevate">{{ p }}</a>
+      {% endif %}
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+
+{% else %}
+<div class="px-5 py-12 text-center text-muted text-sm">
+  {% if q or filter_project %}No PM runs match your search.{% else %}No PM runs yet. Specs appear here once the PM agent runs.{% endif %}
+</div>
+{% endif %}

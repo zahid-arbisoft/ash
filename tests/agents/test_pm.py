@@ -1,3 +1,4 @@
+import pytest
 from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
 from langchain_core.messages import AIMessage
 from pydantic import BaseModel
@@ -95,6 +96,17 @@ def _patch_sink(monkeypatch):
 class _Board:
     def publish_spec(self, item_id, url, s):
         return "board-ref-1"
+
+
+@pytest.fixture(autouse=True)
+def _stub_persistence(monkeypatch):
+    """Keep PM tests offline: the spec-persistence seam is a no-op (DB exercised elsewhere)."""
+
+    async def _noop(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr("ash.agents.pm.persist_spec_record", _noop)
+    monkeypatch.setattr("ash.agents.pm.update_spec_ticket_refs", _noop)
 
 
 # ── PMAgent (phase 1: spec generation + board write) ─────────────────────────

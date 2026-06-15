@@ -20,6 +20,7 @@ from ash.app_context import build_runner
 from ash.config.settings import get_settings
 from ash.db.base import get_engine, init_db
 from ash.graph.checkpointer import checkpointer_from_dsn
+from ash.graph.dispatcher import DispatchService
 from ash.web import router as web_router
 
 
@@ -29,9 +30,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await init_db()  # create app tables (integrations, run records)
     async with checkpointer_from_dsn(settings.postgres_dsn) as saver:
         await saver.setup()
-        app.state.runner = build_runner(settings, checkpointer=saver)
+        runner = build_runner(settings, checkpointer=saver)
+        app.state.runner = runner
         setup_admin(app, get_engine(), settings)
-        yield
+        dispatcher = DispatchService(runner)
+        dispatcher.start()
+        try:
+            yield
+        finally:
+            await dispatcher.stop()
 
 
 def create_app() -> FastAPI:

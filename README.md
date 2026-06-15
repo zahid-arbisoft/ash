@@ -93,6 +93,10 @@ just db-up                 # start Postgres (docker compose)
 just serve                 # app at http://127.0.0.1:8000  (UI /, admin /admin, API /docs)
 ```
 
+> **Setting this up for the first time / onboarding a teammate?** Follow the end-to-end runbook:
+> **[docs/ONBOARD_A_PROJECT.md](docs/ONBOARD_A_PROJECT.md)** (env → infra → project YAML → connector
+> → first run → troubleshooting; includes "do I need a fork?" — no, `mode: single` for your own repos).
+
 Add an issue source in the **admin portal** (`/admin`), then start a run from the **UI** (`/ui/runs/new`)
 or the API:
 

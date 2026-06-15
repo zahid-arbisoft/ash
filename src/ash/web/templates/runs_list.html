@@ -1,115 +1,86 @@
 {% extends "base.html" %}
 {% block title %}Runs{% endblock %}
+{% block breadcrumb %}Runs{% endblock %}
 {% block body %}
-<style>
-  .filter-bar { display:flex; gap:.75rem; align-items:flex-end; flex-wrap:wrap; }
-  .filter-bar label { display:block; font-size:.8rem; color:var(--muted); margin-bottom:.25rem; }
-  .filter-bar select, .filter-bar input { width:auto; }
-  .filter-bar .btn-sm { padding:.4rem .75rem; font-size:.85rem; }
-  .pager { display:flex; gap:.5rem; align-items:center; justify-content:flex-end; margin-top:1rem; }
-  .pager a { color:var(--accent); text-decoration:none; padding:.3rem .6rem; border:1px solid var(--border); border-radius:6px; font-size:.85rem; }
-  .pager a:hover { border-color:var(--accent); }
-  .pager .cur { padding:.3rem .6rem; border-radius:6px; border:1px solid var(--accent); font-size:.85rem; font-weight:600; }
-  .pager .muted-pg { padding:.3rem .6rem; font-size:.85rem; color:var(--muted); }
-  .mode-raw_to_spec  { background:#1a2a4a; color:#93c5fd; border-color:#2d4a7a; }
-  .mode-spec_ready   { background:#1a3a1a; color:#86efac; border-color:#2d6a2d; }
-  .mode-raw_to_dev   { background:#2a1a3a; color:#c4b5fd; border-color:#5a3a7a; }
-  td.run-id { font-family:monospace; font-size:.88rem; }
-</style>
 
-<div style="display:flex; align-items:baseline; gap:1rem; justify-content:space-between;">
-  <h1>Runs <span class="muted" style="font-size:.9rem;font-weight:400">({{ total }} total)</span></h1>
-  <a class="btn" href="/ui/runs/new">+ New run</a>
+<div class="flex items-center justify-between mb-5">
+  <div>
+    <h1 class="text-xl font-semibold">Runs <span class="text-muted text-base font-normal">({{ total }})</span></h1>
+    <p class="text-sm text-muted mt-0.5">Every run started in the platform.</p>
+  </div>
+  <a href="/ui/runs/new"
+     class="bg-accent text-bg font-semibold text-sm rounded-lg px-4 h-9 inline-flex items-center hover:brightness-110">
+    + New run
+  </a>
 </div>
 
-<!-- Filter bar -->
-<div class="card">
-  <form method="get" action="/ui/runs" class="filter-bar">
-    <div>
-      <label>Project</label>
-      <select name="project" onchange="this.form.submit()">
-        <option value="">All projects</option>
-        {% for p in projects %}
-          <option value="{{ p }}" {% if filter_project == p %}selected{% endif %}>{{ p }}</option>
-        {% endfor %}
-      </select>
-    </div>
-    <div>
-      <label>Intake mode</label>
-      <select name="mode" onchange="this.form.submit()">
-        <option value="">All modes</option>
-        {% for m in modes %}
-          <option value="{{ m }}" {% if filter_mode == m %}selected{% endif %}>{{ m }}</option>
-        {% endfor %}
-      </select>
-    </div>
-    {% if filter_project or filter_mode %}
-    <div>
-      <label>&nbsp;</label>
-      <a href="/ui/runs" style="color:var(--muted);font-size:.85rem;">✕ clear</a>
-    </div>
-    {% endif %}
-  </form>
-</div>
+<form method="get" action="/ui/runs" class="flex flex-wrap gap-2 mb-4">
+  <select name="project" onchange="this.form.submit()"
+          class="!w-auto bg-surface border border-border rounded-lg px-3 h-9 text-sm">
+    <option value="">All projects</option>
+    {% for p in projects %}<option value="{{ p }}" {{ "selected" if filter_project == p }}>{{ p }}</option>{% endfor %}
+  </select>
+  <select name="mode" onchange="this.form.submit()"
+          class="!w-auto bg-surface border border-border rounded-lg px-3 h-9 text-sm">
+    <option value="">All modes</option>
+    {% for m in modes %}<option value="{{ m }}" {{ "selected" if filter_mode == m }}>{{ m }}</option>{% endfor %}
+  </select>
+  {% if filter_project or filter_mode %}
+  <a href="/ui/runs" class="text-sm text-muted hover:text-fg self-center px-2">✕ clear</a>
+  {% endif %}
+</form>
 
-<!-- Runs table -->
-<div class="card" style="padding:0;overflow:hidden;">
+<div class="bg-surface border border-border rounded-xl overflow-hidden">
   {% if runs %}
-  <table>
+  <table class="w-full text-sm">
     <thead>
-      <tr>
-        <th>Run ID</th>
-        <th>Project</th>
-        <th>Item</th>
-        <th>Mode</th>
-        <th>Started</th>
+      <tr class="text-left text-muted text-xs uppercase tracking-wide">
+        <th class="font-medium px-5 py-2">Run ID</th>
+        <th class="font-medium px-3 py-2">Project</th>
+        <th class="font-medium px-3 py-2">Item</th>
+        <th class="font-medium px-3 py-2">Mode</th>
+        <th class="font-medium px-3 py-2">Status</th>
+        <th class="font-medium px-5 py-2 text-right">Started</th>
       </tr>
     </thead>
     <tbody>
       {% for r in runs %}
-      <tr>
-        <td class="run-id"><a href="/ui/runs/{{ r.run_id }}">{{ r.run_id[:12] }}</a></td>
-        <td>{{ r.project }}</td>
-        <td>{{ r.item_id or "—" }}</td>
-        <td><span class="pill mode-{{ r.intake_mode }}">{{ r.intake_mode }}</span></td>
-        <td class="muted">{{ r.created_at.strftime("%Y-%m-%d %H:%M") }}</td>
+      {% set mt = {"raw_to_spec":"bg-accent/15 text-accent","spec_ready":"bg-ok/15 text-ok",
+                   "raw_to_dev":"bg-warn/15 text-warn"}.get(r.intake_mode, "bg-border text-muted") %}
+      {% set st = {"completed":"text-ok","failed":"text-danger","awaiting_review":"text-warn",
+                   "running":"text-accent"}.get(r.status, "text-muted") %}
+      <tr class="border-t border-border/60 hover:bg-elevate/40">
+        <td class="px-5 py-2.5"><a href="/ui/runs/{{ r.run_id }}" class="font-mono text-accent hover:underline">{{ r.run_id[:12] }}</a></td>
+        <td class="px-3 py-2.5">{{ r.project }}</td>
+        <td class="px-3 py-2.5 text-muted">{{ r.item_id or "—" }}</td>
+        <td class="px-3 py-2.5"><span class="text-xs px-2 py-0.5 rounded-full {{ mt }}">{{ r.intake_mode }}</span></td>
+        <td class="px-3 py-2.5 text-xs {{ st }}">{{ r.status }}</td>
+        <td class="px-5 py-2.5 text-right text-muted whitespace-nowrap">{{ r.created_at.strftime("%b %d, %H:%M") }}</td>
       </tr>
       {% endfor %}
     </tbody>
   </table>
 
-  <!-- Pagination -->
   {% if pages > 1 %}
-  <div class="pager" style="padding:.75rem 1rem;">
-    {% if page > 1 %}
-      <a href="?page={{ page - 1 }}&project={{ filter_project }}&mode={{ filter_mode }}">‹ prev</a>
-    {% else %}
-      <span class="muted-pg">‹ prev</span>
-    {% endif %}
-
+  <div class="flex items-center justify-end gap-1 px-5 py-3 border-t border-border text-sm">
     {% for p in range(1, pages + 1) %}
       {% if p == page %}
-        <span class="cur">{{ p }}</span>
+        <span class="px-2.5 py-1 rounded bg-accent text-bg font-medium">{{ p }}</span>
       {% elif p == 1 or p == pages or (p >= page - 2 and p <= page + 2) %}
-        <a href="?page={{ p }}&project={{ filter_project }}&mode={{ filter_mode }}">{{ p }}</a>
+        <a href="?page={{ p }}&project={{ filter_project }}&mode={{ filter_mode }}"
+           class="px-2.5 py-1 rounded text-muted hover:text-fg hover:bg-elevate">{{ p }}</a>
       {% elif p == page - 3 or p == page + 3 %}
-        <span class="muted-pg">…</span>
+        <span class="px-1 text-muted/60">…</span>
       {% endif %}
     {% endfor %}
-
-    {% if page < pages %}
-      <a href="?page={{ page + 1 }}&project={{ filter_project }}&mode={{ filter_mode }}">next ›</a>
-    {% else %}
-      <span class="muted-pg">next ›</span>
-    {% endif %}
   </div>
   {% endif %}
 
   {% else %}
-  <p class="muted" style="padding:1rem 1.25rem;">
+  <div class="px-5 py-12 text-center text-muted text-sm">
     No runs found{% if filter_project or filter_mode %} for these filters{% endif %}.
-    <a href="/ui/runs/new">Start one</a>.
-  </p>
+    <a href="/ui/runs/new" class="text-accent hover:underline">Start one →</a>
+  </div>
   {% endif %}
 </div>
 {% endblock %}
