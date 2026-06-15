@@ -200,3 +200,5 @@ async def test_pm_publish_keeps_spec_when_push_fails(monkeypatch):
     assert update["pm"]["spec"] == spec
     assert "error" not in update["pm"]
     assert "ticket push failed" in update["pm"]["note"]
+
+

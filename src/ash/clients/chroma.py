@@ -71,6 +71,6 @@ class VectorStoreClient:
         if docs_list and metas_list:
             for doc, meta in zip(docs_list[0], metas_list[0], strict=False):
                 path = (meta or {}).get("path", "unknown")
-                snippet = doc[:300].replace("\n", " ")
+                snippet = doc[:800].replace("\n", " ")
                 hits.append(f"{path}: {snippet}")
         return hits

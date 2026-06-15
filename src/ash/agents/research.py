@@ -11,9 +11,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from pathlib import Path
-from typing import Any, cast
-
-from langchain.agents import create_agent
+from typing import Any
 
 from ash.agents.base import BaseAgent
 from ash.clients import code_intel
@@ -62,21 +60,36 @@ class ResearchAgent(BaseAgent):
         wt_path = await asyncio.to_thread(ws.create_worktree, branch, base_ref)
         logger.info("[research] worktree ready at %s", wt_path)
 
+        # Per-run collection so parallel research runs don't collide.
         client = VectorStoreClient(
             host=self.settings.chroma_host,
             port=self.settings.chroma_port,
-            collection=state.project,
+            collection=f"{state.project}_{state.run_id}",
         )
-        logger.info("[research] resetting chroma collection=%s", state.project)
-        await asyncio.to_thread(client.reset)
-        logger.info("[research] indexing worktree into chroma")
-        n = await asyncio.to_thread(client.index_directory, wt_path)
-        logger.info("[research] indexed %d files", n)
+        try:
+            logger.info("[research] resetting chroma collection")
+            await asyncio.to_thread(client.reset)
+            logger.info("[research] indexing worktree into chroma")
+            n = await asyncio.to_thread(client.index_directory, wt_path)
+            logger.info("[research] indexed %d files", n)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "[research] chroma unavailable (%s: %s) — skipping",
+                type(exc).__name__,
+                exc,
+            )
+            return {
+                "research": {
+                    "note": (
+                        f"skipped: chroma unavailable — {type(exc).__name__}: {exc}. "
+                        "Run `just db-up` to start Chroma."
+                    )
+                }
+            }
 
         logger.info("[research] starting llm plan loop")
         plan = await self._plan(wt_path, client, brief)
-        n_tickets = len(plan.tickets) if hasattr(plan, "tickets") else -1
-        logger.info("[research] plan complete tickets=%d", n_tickets)
+        logger.info("[research] plan complete steps=%d", len(plan.steps))
         return {
             "research": {
                 "plan": plan,
@@ -90,16 +103,11 @@ class ResearchAgent(BaseAgent):
     ) -> ImplementationPlan:
         tree = await asyncio.to_thread(code_intel.repo_tree, worktree)
         toolkit = CodebaseToolkit(client=client, root=worktree)
-        agent: Any = create_agent(
-            model=self.get_model(),
-            tools=toolkit.get_tools(),
-            system_prompt=_SYSTEM,
-            response_format=ImplementationPlan,
-        )
         user = (
             f"## Work brief\n{brief}\n\n"
             f"## Repository overview (top levels)\n{tree}\n\n"
             "Use search_codebase to find relevant code, then produce the implementation plan."
         )
-        result = await agent.ainvoke({"messages": [("user", user)]})
-        return cast(ImplementationPlan, result["structured_response"])
+        return await self.generate(
+            ImplementationPlan, system=_SYSTEM, user=user, tools=toolkit.get_tools()
+        )

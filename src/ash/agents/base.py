@@ -46,18 +46,29 @@ class BaseAgent(ABC):
         return []
 
     def build_agent(
-        self, *, system_prompt: str, response_format: type[BaseModel] | None = None
+        self,
+        *,
+        system_prompt: str,
+        response_format: type[BaseModel] | None = None,
+        tools: list[BaseTool] | None = None,
     ) -> Any:
         """Construct this agent's `create_agent` runtime (its own compiled LangGraph)."""
         return create_agent(
             model=self.get_model(),
-            tools=self.get_tools(),
+            tools=tools if tools is not None else self.get_tools(),
             system_prompt=system_prompt,
             response_format=response_format,
         )
 
-    async def generate(self, schema: type[T], *, system: str, user: str) -> T:
+    async def generate(
+        self,
+        schema: type[T],
+        *,
+        system: str,
+        user: str,
+        tools: list[BaseTool] | None = None,
+    ) -> T:
         """Run a `create_agent` with `response_format=schema` and return the validated object."""
-        agent = self.build_agent(system_prompt=system, response_format=schema)
+        agent = self.build_agent(system_prompt=system, response_format=schema, tools=tools)
         result = await agent.ainvoke({"messages": [("user", user)]})
         return cast(T, result["structured_response"])
