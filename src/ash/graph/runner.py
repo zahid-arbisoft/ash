@@ -10,10 +10,15 @@ import asyncio
 import uuid
 from typing import Any, cast
 
+import structlog
 from langgraph.types import Command
 from pydantic_core import to_jsonable_python
+from structlog.contextvars import bind_contextvars, clear_contextvars
 
 from ash.graph.state import WorkflowState
+from ash.observability.langfuse import get_langfuse_callback
+
+logger = structlog.get_logger(__name__)
 
 
 class Runner:
@@ -21,9 +26,12 @@ class Runner:
         self._graph = graph
         self._tasks: set[asyncio.Task[Any]] = set()
 
-    @staticmethod
-    def _config(thread_id: str) -> dict[str, Any]:
-        return {"configurable": {"thread_id": thread_id}}
+    def _config(self, thread_id: str) -> dict[str, Any]:
+        cfg: dict[str, Any] = {"configurable": {"thread_id": thread_id}}
+        cb = get_langfuse_callback()
+        if cb is not None:
+            cfg["callbacks"] = [cb]
+        return cfg
 
     async def start_run(
         self,
@@ -50,7 +58,16 @@ class Runner:
         )
 
         async def _invoke() -> None:
-            await self._graph.ainvoke(initial, config=self._config(run_id))
+            clear_contextvars()
+            bind_contextvars(run_id=run_id, intake_mode=intake_mode)
+            logger.info(
+                "run_start", project=project, item_id=item_id, integration_id=integration_id
+            )
+            try:
+                await self._graph.ainvoke(initial, config=self._config(run_id))
+                logger.info("run_end", status="completed")
+            except Exception:
+                logger.exception("run_end", status="crashed")
 
         if wait:
             await _invoke()
