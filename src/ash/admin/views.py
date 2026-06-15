@@ -37,11 +37,11 @@ class ConnectorAdmin(ModelView, model=Connector):
     column_searchable_list = [Connector.name]
     column_descriptions = {
         "config": (
-            'Kind-specific JSON.  '
+            "Kind-specific JSON.  "
             'github: {"repo": "owner/name"}  |  '
             'jira: {"email": "you@example.com", "project_key": "ENG"}  |  '
             'plane: {"workspace_slug": "acme", "project_id": "uuid"}  '
-            '— full field reference at /ui/connectors'
+            "— full field reference at /ui/connectors"
         ),
         "secret": (
             "API token / password (encrypted at rest).  "

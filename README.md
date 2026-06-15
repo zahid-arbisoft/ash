@@ -80,7 +80,7 @@ The tool layer is 3 levels: `clients/` (real logic) → `toolkits/` (`BaseTool` 
 
 ## Quickstart
 
-Requires **Python ≥ 3.12** and Docker (for Postgres).
+Requires **Python ≥ 3.12** and Docker (for Postgres and Chroma).
 
 ```bash
 just setup                 # venv (py>=3.12) + editable install + dev tools

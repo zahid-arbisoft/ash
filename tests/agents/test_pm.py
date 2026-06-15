@@ -77,7 +77,8 @@ class _Board:
 
 
 async def test_pm_generates_spec_and_writes_board(monkeypatch):
-    """PMAgent generates the spec and writes to the board; ticket push is deferred to PMPublishAgent."""
+    """PMAgent generates the spec and writes to the board; ticket push
+    is deferred to PMPublishAgent."""
     spec = _spec(
         tickets=[
             Ticket(id="T1", title="Endpoint", description="add", type=TicketType.feature),
@@ -164,9 +165,7 @@ async def test_pm_publish_pushes_tickets_on_approve(monkeypatch):
 
 
 async def test_pm_publish_cancels_on_reject(monkeypatch):
-    spec = _spec(
-        tickets=[Ticket(id="T1", title="x", description="y", type=TicketType.feature)]
-    )
+    spec = _spec(tickets=[Ticket(id="T1", title="x", description="y", type=TicketType.feature)])
     monkeypatch.setattr("ash.agents.pm.get_board", lambda _dir: _Board())
     monkeypatch.setattr("ash.agents.pm.interrupt", lambda _value: "reject")
 

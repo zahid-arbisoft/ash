@@ -132,7 +132,9 @@ async def test_intake_error_skips_pm_and_fails_run():
 
 async def test_spec_ready_routes_through_pm():
     """spec_ready now routes through PM (different prompt, same nodes as raw_to_spec)."""
-    out = await _run(_build("This is a pre-written spec document."), "spec_ready", "spec text", "t3")
+    out = await _run(
+        _build("This is a pre-written spec document."), "spec_ready", "spec text", "t3"
+    )
     # PMStub returns note="pm-ran" — confirms PM was reached
     assert out["pm"]["note"] == "pm-ran"
     assert out["status"] == "completed"

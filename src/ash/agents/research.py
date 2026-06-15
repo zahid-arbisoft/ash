@@ -1,45 +1,36 @@
 """Research / Spike agent (read-only) — grounds a plan in the actual repo, in a git worktree.
 
-Sets up the per-ticket worktree (parallel-safety primitive), orients the model with a shallow repo
-tree + ripgrep hits, and produces a grounded `ImplementationPlan`. Works from the PM spec when one
-exists, or directly from the raw issue (`raw_to_dev`). No writes happen here. With no local clone
-configured it records a skip note so a PM-only run still completes.
+Sets up the per-ticket worktree (parallel-safety primitive), indexes the worktree into Chroma for
+semantic search, then produces a grounded `ImplementationPlan` via a tool-calling loop. Works from
+the PM spec when one exists, or directly from the raw issue (`raw_to_dev`). No writes happen here.
+With no local clone configured it records a skip note so a PM-only run still completes.
 """
 
 from __future__ import annotations
 
 import asyncio
-import re
+import logging
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
+
+from langchain.agents import create_agent
 
 from ash.agents.base import BaseAgent
 from ash.clients import code_intel
+from ash.clients.chroma import VectorStoreClient
 from ash.clients.git_repo import RepoWorkspace
 from ash.config.settings import load_project
 from ash.graph.state import WorkflowState
 from ash.schemas import ImplementationPlan
+from ash.toolkits.codebase import CodebaseToolkit
+
+logger = logging.getLogger(__name__)
 
 _SYSTEM = """You are a senior engineer doing a research spike. Given the work brief and a real \
-view of the repository, produce a concrete, grounded implementation plan. Reference ACTUAL \
-files/paths you see in the provided repo overview and search hits. Prefer the smallest change \
-that satisfies the brief. Do not invent files that aren't plausible for this codebase. List open \
-questions instead of guessing."""
-
-_STOP = {
-    "the",
-    "and",
-    "for",
-    "with",
-    "this",
-    "that",
-    "view",
-    "list",
-    "show",
-    "add",
-    "feature",
-    "bug",
-}
+view of the repository, produce a concrete, grounded implementation plan. Use the search_codebase \
+tool to find relevant files and code before writing your plan. Reference ACTUAL files/paths you \
+discover. Prefer the smallest change that satisfies the brief. Do not invent files that aren't \
+plausible for this codebase. List open questions instead of guessing."""
 
 
 class ResearchAgent(BaseAgent):
@@ -62,12 +53,30 @@ class ResearchAgent(BaseAgent):
             }
 
         ws = RepoWorkspace(work, project.runtime_dir / "worktrees")
+        logger.info("[research] syncing upstream remote")
         await asyncio.to_thread(ws.ensure_upstream)
+        logger.info("[research] syncing base branch")
         base_ref = await asyncio.to_thread(ws.sync_base)
         branch = ws.branch_name_from(state.item_id, state.issue_title)
+        logger.info("[research] creating worktree branch=%s base=%s", branch, base_ref)
         wt_path = await asyncio.to_thread(ws.create_worktree, branch, base_ref)
+        logger.info("[research] worktree ready at %s", wt_path)
 
-        plan = await self._plan(wt_path, state, brief)
+        client = VectorStoreClient(
+            host=self.settings.chroma_host,
+            port=self.settings.chroma_port,
+            collection=state.project,
+        )
+        logger.info("[research] resetting chroma collection=%s", state.project)
+        await asyncio.to_thread(client.reset)
+        logger.info("[research] indexing worktree into chroma")
+        n = await asyncio.to_thread(client.index_directory, wt_path)
+        logger.info("[research] indexed %d files", n)
+
+        logger.info("[research] starting llm plan loop")
+        plan = await self._plan(wt_path, client, brief)
+        n_tickets = len(plan.tickets) if hasattr(plan, "tickets") else -1
+        logger.info("[research] plan complete tickets=%d", n_tickets)
         return {
             "research": {
                 "plan": plan,
@@ -76,31 +85,21 @@ class ResearchAgent(BaseAgent):
             }
         }
 
-    async def _plan(self, worktree: Path, state: WorkflowState, brief: str) -> ImplementationPlan:
+    async def _plan(
+        self, worktree: Path, client: VectorStoreClient, brief: str
+    ) -> ImplementationPlan:
         tree = await asyncio.to_thread(code_intel.repo_tree, worktree)
-        hits: list[str] = []
-        for kw in _keywords(state):
-            hits += await asyncio.to_thread(code_intel.search, worktree, kw, 8)
-        hits = hits[:40]
-
+        toolkit = CodebaseToolkit(client=client, root=worktree)
+        agent: Any = create_agent(
+            model=self.get_model(),
+            tools=toolkit.get_tools(),
+            system_prompt=_SYSTEM,
+            response_format=ImplementationPlan,
+        )
         user = (
             f"## Work brief\n{brief}\n\n"
             f"## Repository overview (top levels)\n{tree}\n\n"
-            "## Search hits for keywords\n" + ("\n".join(hits) or "(none)") + "\n\n"
-            "Produce the implementation plan."
+            "Use search_codebase to find relevant code, then produce the implementation plan."
         )
-        return await self.generate(ImplementationPlan, system=_SYSTEM, user=user)
-
-
-def _keywords(state: WorkflowState) -> list[str]:
-    text = state.issue_title
-    if state.pm.spec is not None:
-        text = f"{text} {state.pm.spec.epic.title} {state.pm.spec.epic.summary}"
-    elif state.raw_issue is not None:
-        text = f"{text} {state.raw_issue.body}"
-    words = re.findall(r"[A-Za-z][A-Za-z0-9_]{3,}", text.lower())
-    seen: list[str] = []
-    for w in words:
-        if w not in _STOP and w not in seen:
-            seen.append(w)
-    return seen[:6]
+        result = await agent.ainvoke({"messages": [("user", user)]})
+        return cast(ImplementationPlan, result["structured_response"])

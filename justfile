@@ -42,7 +42,7 @@ serve:
 
 # ── data services ──
 db-up:
-    docker compose up -d postgres
+    docker compose up -d postgres chroma
 
 db-down:
     docker compose down

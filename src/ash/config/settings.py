@@ -97,6 +97,10 @@ class Settings(BaseSettings):
     agent_reviewer: AgentModelOverride = Field(default_factory=AgentModelOverride)
     agent_fixer: AgentModelOverride = Field(default_factory=AgentModelOverride)
 
+    # vector store (Chroma)
+    chroma_host: str = "localhost"
+    chroma_port: int = 8001
+
     # logging
     log_level: str = "INFO"
 
