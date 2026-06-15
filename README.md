@@ -78,6 +78,10 @@ tests/               # pytest + pytest-asyncio (mocked LLM/clients, MemorySaver)
 
 The tool layer is 3 levels: `clients/` (real logic) → `toolkits/` (`BaseTool` wrappers) → agents.
 
+Spec-quality standards (the rules the PM agent follows + the org best practices vendored from
+[arbisoft/ai-skillforge](https://github.com/arbisoft/ai-skillforge/tree/main/Claude)) live in
+**[docs/best_practices.md](docs/best_practices.md)**.
+
 ## Quickstart
 
 Requires **Python ≥ 3.12** and Docker (for Postgres and Chroma).

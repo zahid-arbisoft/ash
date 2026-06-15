@@ -321,6 +321,7 @@ with it, so a teammate could point the loop at a new repo at any phase boundary.
 | 18 | **Agent roster kept; Reviewer/Fixer stubbed; quality gates hardened** | We keep ASH's PM/Research/Coding (real) and add Reviewer/Fixer as `BaseAgent` stubs (Phases 2–3). With no local clone, Research/Coding skip gracefully so a PM-only run completes. **mypy --strict** is enforced in CI (ruff → mypy → pytest); Python ≥3.12. Posting the spec back as an issue comment is deferred (the `post_comment` seam exists). |
 | 19 | **Pluggable issue-source integrations + per-run intake routing + admin/UI** | Issue sources (GitHub / Jira / Plane) are DB-backed `Integration` rows behind one `IssueProvider` interface; secrets **encrypted at rest** (Fernet). A per-run **intake_mode** (`raw_to_spec` / `spec_ready` / `raw_to_dev`) drives a LangGraph **conditional edge** that uses or skips PM. App DB = **SQLAlchemy 2.0 async** (same Postgres); admin = **SQLAdmin** at `/admin` (env-credentialed); FE = **Jinja2** UI at `/`. New sources = new provider, no graph/agent changes. |
 | 20 | **Intake mode semantics: `raw_to_dev` is the only mode that skips PM** | `raw_to_spec` = PM generates full spec + tickets from raw requirements. `spec_ready` = PM extracts tickets (stories) from a pre-written spec using a distinct prompt — PM is NOT skipped, the JSON-parsing shortcut is removed. `raw_to_dev` = PM skipped entirely; raw issue goes straight to the build team. PM is two graph nodes: `pm` (generate + checkpoint) → `pm_publish` (HITL interrupt → approve/reject → push tickets). |
+| 21 | **Spec quality = prompt rules + deterministic validation (two layers)** | The org spec-quality standard (from arbisoft/ai-skillforge: `ai-first-engineering` + `blueprint`) is enforced, not hoped for. **Layer 1:** six hard rules in the PM system prompt (`_QUALITY_RULES`: no invented context, honor every explicit signal, calibrate scope to the ask, flag unknowns not guess, acyclic dependencies, complete risk assessment) + schema guidance (`Ticket.description` cold-start bar, `Spec.open_questions`). **Layer 2:** `agents/spec_validator.py` proves what's decidable in code (acyclic dependency graph, no dangling/self deps, unique ids, spike↔needs_research). On failure the PM does **one self-correction round** (errors fed back → regenerate); residual issues surface in `open_questions` for the human gate — a structurally broken spec never ships silently. Three skills vendored verbatim into `.claude/skills/`; standard documented in `docs/best_practices.md`. |
 
 ### 7a. Repo topology — configurable per project
 
@@ -512,6 +513,37 @@ Don't remove a gate until the thing under it has earned it.
 ## 11. Changelog
 
 Per the working agreement (top of doc), every decision/implementation change is logged here.
+
+- **2026-06-15 — Spec-quality rule tightening (second pass).** Re-ran the same requirement through
+  PM post-hardening; the structural issues (cycles, dep graph) were fixed, but four prompt-level gaps
+  remained: (a) named restrictions ("no screen recording", "no external calls") missing from epic AC
+  as negative conditions; (b) "working prototype" still got 3-OS signal adapters; (c) `open_questions`
+  field left empty despite Workstream format and UI framework being undefined; (d) activity-monitoring
+  consent/labor-law risk absent. **Fixes:** Rule 2 strengthened (named restrictions → negative AC
+  conditions); Rule 3 tightened (prototype targets ONE platform unless multi-platform is explicit);
+  Rule 4 expanded with mandatory pre-finish audit and a note that empty `open_questions` on a
+  greenfield project is a red flag; Rule 6 extended with an explicit employment-monitoring consent
+  clause (GDPR Art. 13, CCPA, local labor law). `Spec.open_questions` field description updated to
+  list concrete triggers (undefined format, undecided framework/platform). `docs/best_practices.md`
+  updated with the new rule text and a second worked-example table mapping Run-2 defects to the new
+  enforcement. Verified: ruff + mypy --strict clean, 88 tests green (unchanged).
+
+- **2026-06-15 — Spec-quality hardening (prompt rules + deterministic validation) + Arbisoft
+  best-practices integration (decision #21).** Diagnosed real `raw_to_spec` output that shipped six
+  defects: a circular dependency (T2↔T3), an invented tech stack ("existing Electron/React app"),
+  a dropped UX reference (Granola), prototype scoped as a production system, an undefined external
+  format assumed silently, and an incomplete risk assessment. **Two-layer fix:** (1) `_QUALITY_RULES`
+  appended to both PM system prompts (`raw_to_spec` + `spec_ready`) — six hard rules + a self-check;
+  `Ticket.title`/`description` now carry a cold-start-executable quality bar, and `Spec.open_questions`
+  gives the model a place to record unknowns instead of inventing them. (2) New
+  `agents/spec_validator.py` (`validate_spec`) deterministically checks the dependency graph is
+  acyclic (DFS cycle detection), all deps reference real ticket ids, no self-deps, unique ids, and
+  spike↔needs_research consistency. `PMAgent._validate_and_repair` runs one self-correction round on
+  failure (errors fed back → regenerate); residual issues are surfaced in `open_questions` for the
+  human review gate. **Integration:** vendored `ai-first-engineering`, `blueprint`, and
+  `prompt-optimizer` skills verbatim into `.claude/skills/` (provenance noted) and documented the
+  standard + how ASH enforces it in `docs/best_practices.md` (linked from README). Verified: ruff +
+  mypy --strict clean (67 files), 88 tests green (+10: 8 validator, 2 PM correction-loop).
 
 - **2026-06-15 — Connector config hints in admin + interactive setup guide on connectors page.**
   Added per-field help text (`column_descriptions`) to `ConnectorAdmin` in `admin/views.py` for the

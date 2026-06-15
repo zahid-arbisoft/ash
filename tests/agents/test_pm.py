@@ -44,6 +44,30 @@ class FakeModel(GenericFakeChatModel):
         return self
 
 
+class SeqFakeModel(GenericFakeChatModel):
+    """Emits one structured result per generate() call, in order — for the correction loop."""
+
+    def __init__(self, results: list[BaseModel]) -> None:
+        msgs = [
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": type(r).__name__,
+                        "args": r.model_dump(),
+                        "id": f"call_{i}",
+                        "type": "tool_call",
+                    }
+                ],
+            )
+            for i, r in enumerate(results)
+        ]
+        super().__init__(messages=iter(msgs))
+
+    def bind_tools(self, tools, **kwargs):
+        return self
+
+
 class _FakeSession:
     async def __aenter__(self):
         return self
@@ -112,6 +136,61 @@ async def test_pm_generates_spec_and_writes_board(monkeypatch):
     assert "awaiting your review" in update["pm"]["note"]
     assert "spikes: T2" in update["pm"]["note"]
     assert published["item_id"] == "42"
+
+
+async def test_pm_repairs_circular_dependency(monkeypatch):
+    """A structurally broken spec triggers one correction round; the repaired spec is published."""
+    bad = _spec(
+        tickets=[
+            Ticket(
+                id="T1", title="A", description="x", type=TicketType.feature, dependencies=["T2"]
+            ),
+            Ticket(
+                id="T2", title="B", description="y", type=TicketType.feature, dependencies=["T1"]
+            ),
+        ]
+    )
+    good = _spec(
+        tickets=[
+            Ticket(id="T1", title="A", description="x", type=TicketType.feature),
+            Ticket(
+                id="T2", title="B", description="y", type=TicketType.feature, dependencies=["T1"]
+            ),
+        ]
+    )
+    monkeypatch.setattr("ash.agents.pm.get_board", lambda _dir: _Board())
+
+    agent = PMAgent(Settings(), model=SeqFakeModel([bad, good]))
+    state = WorkflowState(run_id="r1", project="plane", item_id="42")
+    state.raw_issue = RawIssue(id="42", title="Add export", body="CSV please", source="github")
+
+    update = await agent.run(state)
+    assert update["pm"]["spec"] == good  # the repaired (acyclic) spec, not the broken one
+    assert update["pm"]["spec"].open_questions == []  # clean after one round, nothing surfaced
+
+
+async def test_pm_surfaces_unfixable_validation_in_open_questions(monkeypatch):
+    """If the correction round still fails, the problem is surfaced for human review."""
+    bad = _spec(
+        tickets=[
+            Ticket(
+                id="T1", title="A", description="x", type=TicketType.feature, dependencies=["T2"]
+            ),
+            Ticket(
+                id="T2", title="B", description="y", type=TicketType.feature, dependencies=["T1"]
+            ),
+        ]
+    )
+    monkeypatch.setattr("ash.agents.pm.get_board", lambda _dir: _Board())
+
+    agent = PMAgent(Settings(), model=SeqFakeModel([bad, bad]))  # model fails to fix it
+    state = WorkflowState(run_id="r1", project="plane", item_id="42")
+    state.raw_issue = RawIssue(id="42", title="Add export", body="CSV please", source="github")
+
+    update = await agent.run(state)
+    oq = update["pm"]["spec"].open_questions
+    assert any("Automated validation still flagged" in q for q in oq)
+    assert any("Circular dependency" in q for q in oq)
 
 
 async def test_pm_spec_ready_uses_extract_prompt(monkeypatch):
@@ -200,5 +279,3 @@ async def test_pm_publish_keeps_spec_when_push_fails(monkeypatch):
     assert update["pm"]["spec"] == spec
     assert "error" not in update["pm"]
     assert "ticket push failed" in update["pm"]["note"]
-
-

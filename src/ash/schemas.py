@@ -54,8 +54,24 @@ class TicketType(str, Enum):
 
 class Ticket(BaseModel):
     id: str = Field(description="Short stable id, e.g. T1, T2")
-    title: str
-    description: str
+    title: str = Field(
+        description=(
+            "Action-oriented title starting with a verb, e.g. "
+            "'Add rate-limiting middleware to /api/runs' or 'Fix null-pointer in ConnectorAdmin'."
+        )
+    )
+    description: str = Field(
+        description=(
+            "Full implementation description a developer can act on without asking questions. "
+            "Must cover: (1) what needs to be done and why — the user-facing or system motivation; "
+            "(2) the concrete implementation approach — which files/modules/APIs are involved, "
+            "what changes are needed, and any key design decisions or constraints; "
+            "(3) what is explicitly out of scope for this ticket; "
+            "(4) any gotchas, edge cases, or dependencies on other tickets or external systems. "
+            "Write at least 4-6 sentences. Be specific — reference real module names, "
+            "endpoints, or schema fields from the codebase context where known."
+        )
+    )
     type: TicketType
     needs_research: bool = Field(
         default=False,
@@ -68,7 +84,11 @@ class Ticket(BaseModel):
     )
     dependencies: list[str] = Field(
         default_factory=list,
-        description="IDs of tickets that must land first, e.g. ['T1']. Use an empty list if none.",
+        description=(
+            "IDs of tickets that must be completed first, e.g. ['T1']. Must reference real ticket "
+            "ids and form an acyclic graph — no cycles, no self-reference. Foundational tickets "
+            "(shared infrastructure, data layer, encryption) have none. Use an empty list if none."
+        ),
     )
     estimate: str = Field(default="", description="Rough size, e.g. S/M/L or hours")
 
@@ -90,6 +110,19 @@ class Spec(BaseModel):
     technical_spec: TechnicalSpec
     tickets: list[Ticket]
     risk_assessment: list[Risk] = Field(default_factory=list)
+    open_questions: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Unknowns, ambiguities, or unstated decisions that must be resolved before or during "
+            "implementation. Examples: an undefined external import/export format, an unspecified "
+            "UI framework, an undecided target platform or OS, a missing API contract, or an "
+            "integration whose shape is not yet defined. "
+            "Record them here instead of guessing or inventing details. "
+            "For greenfield projects with external integrations or undecided technology choices, "
+            "this list should rarely be empty — each undefined external or undecided stack choice "
+            "is a candidate."
+        ),
+    )
 
 
 # ── Research/Spike agent output ──────────────────────────────────────────────
