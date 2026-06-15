@@ -7,18 +7,20 @@ from pathlib import Path
 from langchain_core.tools import BaseTool, StructuredTool
 
 from ash.clients import code_intel
+from ash.clients.chroma import VectorStoreClient
 
 
 class CodebaseToolkit:
     """Sandboxed, read-only search/read over a checked-out worktree."""
 
-    def __init__(self, *, root: Path) -> None:
+    def __init__(self, *, client: VectorStoreClient, root: Path) -> None:
+        self._client = client
         self._root = root
 
     def get_tools(self) -> list[BaseTool]:
-        def search_code(query: str) -> str:
-            """Search the repo for a string; returns 'path:line:match' hits."""
-            return "\n".join(code_intel.search(self._root, query)) or "(no hits)"
+        def search_codebase(query: str) -> str:
+            """Semantically search the codebase. Returns relevant file path and snippet."""
+            return "\n".join(self._client.search(query)) or "(no results)"
 
         def read_file(path: str) -> str:
             """Read a file inside the repo by path relative to its root."""
@@ -26,9 +28,12 @@ class CodebaseToolkit:
 
         return [
             StructuredTool.from_function(
-                func=search_code,
-                name="search_code",
-                description="Search the repository for a string; returns path:line:match hits.",
+                func=search_codebase,
+                name="search_codebase",
+                description=(
+                    "Semantically search the codebase for relevant code. "
+                    "Returns file path and snippet for each match."
+                ),
             ),
             StructuredTool.from_function(
                 func=read_file,

@@ -15,6 +15,18 @@ services:
       timeout: 3s
       retries: 10
 
+  chroma:
+    image: chromadb/chroma:latest
+    ports:
+      - "8001:8000"
+    volumes:
+      - ash-chroma:/chroma/chroma
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8000/api/v1/heartbeat || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
   api:
     build: .
     command: uvicorn ash.api.app:app --host 0.0.0.0 --port 8000
@@ -23,10 +35,13 @@ services:
     env_file:
       - .env
     environment:
-      # override the default DSN to reach the compose service by name
+      # override the default DSNs to reach compose services by name
       POSTGRES_DSN: postgresql://ash:ash@postgres:5432/ash
+      CHROMA_HOST: chroma
     depends_on:
       postgres:
+        condition: service_healthy
+      chroma:
         condition: service_healthy
     volumes:
       # bind-mount the whole project so runtime/ (board specs, state, worktrees) is visible on the host
@@ -34,3 +49,4 @@ services:
 
 volumes:
   ash-postgres:
+  ash-chroma:

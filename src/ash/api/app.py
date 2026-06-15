@@ -8,6 +8,7 @@ Jinja2 UI is served at `/`, the admin portal at `/admin`.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -34,6 +35,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 def create_app() -> FastAPI:
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s %(message)s")
+    for noisy in ("httpx", "httpcore", "langchain", "langgraph", "sqlalchemy.engine"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
     app = FastAPI(title="ASH — Agentic Software House", version="0.1.0", lifespan=lifespan)
     app.include_router(api_router)
     app.include_router(web_router)

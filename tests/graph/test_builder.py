@@ -41,7 +41,8 @@ async def test_graph_traverses_all_nodes_and_completes():
 
 
 async def test_graph_fails_fast_on_intake_error():
-    """When intake has an error the graph routes straight to merge without running PM or research."""
+    """When intake has an error the graph routes straight
+    to merge without running PM or research."""
     agents = _agents()
     reached: list[str] = []
 
