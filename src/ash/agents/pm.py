@@ -12,6 +12,7 @@ never repeated on resume.
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import Any
 
 from langgraph.types import interrupt
@@ -24,8 +25,10 @@ from ash.db.base import get_sessionmaker
 from ash.db.runs import persist_spec_record, update_spec_ticket_refs
 from ash.documents import read_documents
 from ash.graph.state import WorkflowState
-from ash.schemas import Spec
+from ash.schemas import Spec, Ticket
 from ash.sinks.service import resolve_task_sink
+
+logger = logging.getLogger(__name__)
 
 # ── Quality rules shared by both modes (the org's spec-quality standard, enforced in-prompt) ──
 
@@ -143,6 +146,54 @@ The following is a pre-written specification. Structure it and extract implement
 --- end specification ---\
 """
 
+# ── per-ticket elaboration (decision #27): give each ticket its own generation budget ──
+
+_SYSTEM_ELABORATE = """\
+You are a senior tech lead writing ONE implementation ticket in full detail for a developer who \
+will pick it up cold. You are given the full source requirements/spec, the epic, and a short \
+outline of the specific ticket to expand.
+
+Expand the outline into a thorough, self-contained ticket. CRITICAL rules:
+- PRESERVE specifics from the source spec — copy real model field names, endpoint paths, \
+task/queue names, file paths, and acceptance criteria into this ticket. Do NOT summarise it away.
+- `description`: a complete narrative of WHAT to build and WHY (several sentences).
+- `implementation_notes`: the HOW — concrete, ordered steps referencing real modules/classes/\
+functions; key design decisions and constraints. This must be substantial, not one line.
+- `affected_files`: the actual files/paths this ticket touches.
+- `api_changes` / `data_model_changes`: concrete endpoint and model/field changes from the spec \
+that belong to THIS ticket (empty lists if genuinely none).
+- `acceptance_criteria`: 2-5 concrete, testable conditions, drawn from the spec where present.
+- `out_of_scope`: what this ticket deliberately excludes (to bound it against sibling tickets).
+- `estimate`: traditional time estimate without AI tooling (e.g. "S", "1d", "3d", "1w").
+- `estimate_days`: the same estimate as a decimal number of person-days (S→0.5, M→2, L→5, \
+"3d"→3.0, "1w"→5.0, "8h"→1.0).
+- `llm_estimate`: same work with LLM pair-programming — typically 5–8× faster (e.g. if \
+estimate is "3d", llm_estimate is "0.4d"). Use the same unit as estimate.
+- `llm_estimate_days`: same as llm_estimate but decimal days (e.g. estimate_days=3.0 → \
+llm_estimate_days≈0.5).
+
+Stay strictly within the scope implied by the outline; do not absorb other tickets' work. Keep the \
+ticket id, title, type, and dependencies exactly as given in the outline.\
+"""
+
+_USER_ELABORATE = """\
+## Source requirements / spec (authoritative — preserve its detail)
+{context}
+
+## Epic
+{epic}
+
+## Ticket to expand (keep id/title/type/dependencies unchanged)
+- id: {tid}
+- title: {title}
+- type: {ttype}
+- needs_research: {needs_research}
+- dependencies: {deps}
+- current (thin) description: {desc}
+
+Return the FULLY DETAILED ticket.\
+"""
+
 # ── correction round: feed deterministic validation errors back for one self-fix ──
 
 _USER_CORRECTION = """\
@@ -182,8 +233,24 @@ class PMAgent(BaseAgent):
         system += _QUALITY_RULES
         system += _STORY_MODE_SINGLE if state.story_mode == "single" else _STORY_MODE_MULTIPLE
 
+        max_tokens = self.settings.model_for(self.name).max_tokens
+        compact = max_tokens <= 4096
+        if compact:
+            system += (
+                f"\n\nCOMPACT MODE (output token budget: {max_tokens}): "
+                "Keep EVERY text field to 1–2 sentences maximum. "
+                "acceptance_criteria: 1–2 items only. "
+                "affected_areas / api_changes / data_model_changes: omit unless critical. "
+                "open_questions: 1–2 items only. "
+                "Output the smallest valid JSON that fully represents the requirements."
+            )
+
         spec = await self.generate(Spec, system=system, user=user.format(context=context))
         spec = await self._validate_and_repair(spec, system=system, context=context)
+        # Skip the per-ticket elaboration pass for small-context models — the initial pass is
+        # already at the token ceiling; elaborate would hit LengthFinishReasonError on every ticket.
+        if not compact and getattr(self.settings, "pm_detail_tickets", True):
+            spec = await self._elaborate_tickets(spec, context=context)
 
         item_id = state.item_id or "upload"
         board = get_board(project.runtime_dir / "board")
@@ -250,6 +317,55 @@ class PMAgent(BaseAgent):
                 f"(needs human review): {'; '.join(remaining)}",
             ]
         return repaired
+
+    async def _elaborate_tickets(self, spec: Spec, *, context: str) -> Spec:
+        """Second pass (decision #27): expand each ticket in its own focused call so it comes out
+        richly detailed instead of compressed into the all-in-one spec response.
+
+        Best-effort and structure-preserving: on any per-ticket failure we keep the original
+        ticket, and we always force the id/title/type/dependencies back to the skeleton's values
+        so the dependency graph (already validated) can't drift. The source spec context is fed in
+        (capped) so a `spec_ready` run carries the provided detail into each ticket verbatim.
+        """
+        if not spec.tickets:
+            return spec
+        cap = getattr(self.settings, "pm_detail_context_chars", 24_000)
+        ctx = context[:cap] if cap and len(context) > cap else context
+        epic = f"{spec.epic.title}\n{spec.epic.summary}\n{spec.epic.business_goal}"
+
+        detailed: list[Ticket] = []
+        for t in spec.tickets:
+            try:
+                user = _USER_ELABORATE.format(
+                    context=ctx,
+                    epic=epic,
+                    tid=t.id,
+                    title=t.title,
+                    ttype=getattr(t.type, "value", t.type),
+                    needs_research=t.needs_research,
+                    deps=", ".join(t.dependencies) or "none",
+                    desc=t.description,
+                )
+                rich = await self.generate(Ticket, system=_SYSTEM_ELABORATE, user=user)
+            except Exception as exc:  # noqa: BLE001 — detailing is best-effort; keep the original
+                logger.warning("[pm] ticket %s detail pass failed (%s); keeping it", t.id, exc)
+                detailed.append(t)
+                continue
+            # Force structural fields back to the validated skeleton; keep the richer content.
+            rich.id = t.id
+            rich.type = t.type
+            rich.dependencies = t.dependencies
+            rich.needs_research = t.needs_research
+            rich.title = t.title or rich.title
+            rich.estimate = rich.estimate or t.estimate
+            if not rich.description.strip():
+                rich.description = t.description
+            if not rich.acceptance_criteria:
+                rich.acceptance_criteria = t.acceptance_criteria
+            detailed.append(rich)
+
+        spec.tickets = detailed
+        return spec
 
 
 class PMPublishAgent(BaseAgent):

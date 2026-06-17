@@ -38,8 +38,19 @@ def test_multiple_mode_builds_all_stories():
     assert set(stories) == {"T1", "T2"}
 
 
-def test_selection_overrides_mode():
+def test_single_mode_ignores_selection():
+    # single mode always produces one story regardless of story_selection so users
+    # can't accidentally create multiple PRs by checking boxes in the review gate.
     state = _state(story_mode="single")
+    state.pm.spec = _spec([_ticket("T1"), _ticket("T2"), _ticket("T3")])
+    state.pm.story_selection = ["T2", "T3"]
+    stories, _ = build_stories(state)
+    assert list(stories) == ["T1"]
+
+
+def test_selection_in_multiple_mode():
+    # in multiple mode story_selection is honoured
+    state = _state(story_mode="multiple")
     state.pm.spec = _spec([_ticket("T1"), _ticket("T2"), _ticket("T3")])
     state.pm.story_selection = ["T2", "T3"]
     stories, _ = build_stories(state)

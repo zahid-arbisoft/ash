@@ -180,7 +180,7 @@ class WorkflowState(BaseModel):
     story_order: list[str] = Field(default_factory=list)
     current_story: str = ""
 
-    status: Literal["running", "completed", "failed"] = "running"
+    status: Literal["running", "completed", "failed", "cancelled"] = "running"
 
     def active_story(self) -> StoryState | None:
         """The story the cursor currently points at, or None."""
@@ -223,12 +223,22 @@ class WorkflowState(BaseModel):
             "",
             ticket.description,
         ]
+        if getattr(ticket, "implementation_notes", ""):
+            lines += ["", "### Implementation notes", ticket.implementation_notes]
+        if getattr(ticket, "affected_files", None):
+            lines += ["", "### Affected files", *(f"- {f}" for f in ticket.affected_files)]
+        if getattr(ticket, "data_model_changes", None):
+            lines += ["", "### Data model changes", *(f"- {d}" for d in ticket.data_model_changes)]
+        if getattr(ticket, "api_changes", None):
+            lines += ["", "### API changes", *(f"- {a}" for a in ticket.api_changes)]
         if ticket.acceptance_criteria:
             lines += [
                 "",
                 "### Acceptance criteria",
                 *(f"- {a}" for a in ticket.acceptance_criteria),
             ]
+        if getattr(ticket, "out_of_scope", ""):
+            lines += ["", f"### Out of scope\n{ticket.out_of_scope}"]
         if ticket.dependencies:
             lines += ["", f"Depends on: {', '.join(ticket.dependencies)}"]
         return "\n".join(lines)

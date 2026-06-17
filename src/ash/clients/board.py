@@ -52,6 +52,20 @@ class FileBoard:
         for t in spec.tickets:
             deps = f" (deps: {', '.join(t.dependencies)})" if t.dependencies else ""
             lines += [f"### {t.id} · {t.type.value} · {t.title}{deps}", t.description, ""]
+            if getattr(t, "implementation_notes", ""):
+                lines += ["**Implementation notes**", "", t.implementation_notes, ""]
+            if getattr(t, "affected_files", None):
+                files = ", ".join(f"`{f}`" for f in t.affected_files)
+                lines += [f"**Affected files:** {files}", ""]
+            if getattr(t, "data_model_changes", None):
+                lines += ["**Data model changes**", *[f"- {d}" for d in t.data_model_changes], ""]
+            if getattr(t, "api_changes", None):
+                lines += ["**API changes**", *[f"- {a}" for a in t.api_changes], ""]
+            if t.acceptance_criteria:
+                crit = [f"- [ ] {c}" for c in t.acceptance_criteria]
+                lines += ["**Acceptance criteria**", *crit, ""]
+            if getattr(t, "out_of_scope", ""):
+                lines += [f"**Out of scope:** {t.out_of_scope}", ""]
         lines += ["## Risks"]
         lines += [
             f"- **{r.severity.value}** — {r.description} → _{r.mitigation}_"

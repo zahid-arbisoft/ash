@@ -210,13 +210,49 @@ async def test_pm_spec_ready_uses_extract_prompt(monkeypatch):
     spec = _spec()
     monkeypatch.setattr("ash.agents.pm.get_board", lambda _dir: _Board())
 
-    agent = PMAgent(Settings(), model=FakeModel(spec))
+    agent = PMAgent(Settings(pm_detail_tickets=False), model=FakeModel(spec))
     state = WorkflowState(run_id="r1", project="plane", item_id="42", intake_mode="spec_ready")
     state.raw_issue = RawIssue(id="42", title="Spec doc", body="Pre-written spec.", source="github")
 
     update = await agent.run(state)
     assert update["pm"]["spec"] == spec
     assert "Spec extracted" in update["pm"]["note"]
+
+
+async def test_pm_elaborates_tickets_with_detail(monkeypatch):
+    """decision #27: the per-ticket second pass enriches each ticket while forcing its
+    id/type/dependencies back to the validated skeleton."""
+    skeleton = _spec(
+        tickets=[Ticket(id="T1", title="Endpoint", description="add", type=TicketType.feature)]
+    )
+    # The elaboration call returns a much richer ticket — with WRONG structural fields, which
+    # must be overwritten back to the skeleton's (T1 / feature / no deps).
+    rich = Ticket(
+        id="WRONG",
+        title="changed",
+        description="A complete, multi-sentence description of what to build and why.",
+        type=TicketType.bug,
+        dependencies=["X"],
+        implementation_notes="Step 1: add the model in projects/models.py. Step 2: wire the view.",
+        affected_files=["projects/models.py", "api/v1/projects/views.py"],
+        api_changes=["POST /api/v1/projects/ -> create + queue plan"],
+        acceptance_criteria=["returns 201", "queues a plan job"],
+    )
+    monkeypatch.setattr("ash.agents.pm.get_board", lambda _dir: _Board())
+
+    agent = PMAgent(Settings(pm_detail_tickets=True, llm_max_tokens=8192), model=SeqFakeModel([skeleton, rich]))
+    state = WorkflowState(run_id="r1", project="plane", item_id="42")
+    state.raw_issue = RawIssue(id="42", title="Spec", body="comprehensive spec", source="github")
+
+    update = await agent.run(state)
+    t = update["pm"]["spec"].tickets[0]
+    assert t.id == "T1"  # forced back from "WRONG"
+    assert t.type == TicketType.feature  # forced back from bug
+    assert t.dependencies == []  # forced back from ["X"]
+    assert t.implementation_notes.startswith("Step 1")
+    assert "projects/models.py" in t.affected_files
+    assert t.api_changes  # detail carried through
+    assert "complete, multi-sentence" in t.description
 
 
 # ── PMPublishAgent (phase 2: HITL interrupt + ticket push) ───────────────────

@@ -39,10 +39,15 @@ def build_stories(state: WorkflowState) -> tuple[dict[str, StoryState], list[str
     if spec is not None and spec.tickets:
         chosen = selected_ticket_ids(state)
         tickets = list(spec.tickets)
-        if chosen is not None:
+        if state.story_mode == "single":
+            # Single mode always produces at most one story — the first non-spike
+            # (or the first ticket overall if all are spikes). Human checkbox selections
+            # are ignored in single mode so the user can't accidentally create multiple PRs
+            # by checking boxes in the review gate.
+            non_spike = [t for t in tickets if not t.needs_research]
+            tickets = (non_spike[:1] if non_spike else tickets[:1])
+        elif chosen is not None:
             tickets = [t for t in tickets if t.id in chosen]
-        elif state.story_mode == "single":
-            tickets = tickets[:1]
         if not tickets:  # selection emptied everything → fall back to the first ticket
             tickets = list(spec.tickets)[:1]
         valid_ids = {t.id for t in tickets}

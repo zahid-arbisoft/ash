@@ -14,11 +14,12 @@ over **FastAPI**, with per-run state persisted in a **Postgres checkpointer**.
 
 ```
 integration ─► intake ─► (intake_mode?)
-   GitHub/Jira/Plane          ├─ raw_to_spec ─► PM (raw → spec + tickets) ─► [review gate] ─┐
-                              ├─ spec_ready  ─► PM (spec → tickets)        ─► [review gate] ─┤
-                              └─ raw_to_dev  ─────────────────────────────────────────────────┤
-                                                                                              ▼
+   GitHub/Jira/Plane          ├─ raw_to_spec ─► PM (raw → spec + tickets) ─► RFC? ─► [review gate] ─┐
+                              ├─ spec_ready  ─► PM (spec → tickets)        ─► RFC? ─► [review gate] ─┤
+                              └─ raw_to_dev  ──────────────────────────────────────────────────────────┤
+                                                                                                       ▼
               worktree ─► Research ─► Coding ─► commit ─► PR (CODE) ─► Reviewer ─► Fixer ─► merge
+                                                         (one PR per story, stories built sequentially)
 ```
 
 - **Issue sources are pluggable integrations** — GitHub, Jira, or Plane — stored in the DB (secrets
@@ -33,10 +34,28 @@ integration ─► intake ─► (intake_mode?)
   - `raw_to_dev` — PM is skipped entirely. The raw issue content is handed straight to the build
     team (Research → Coding → Review). Use when requirements are already unambiguous.
   A LangGraph **conditional edge** routes accordingly.
-- **PM/Research/Coding are real; Reviewer/Fixer are stubs** behind the same `BaseAgent` contract.
-  With no local clone configured, Research/Coding skip gracefully so a PM-only run still completes.
+- **All six agents are real**, sharing the same `BaseAgent` contract and LangChain tool loop:
+  - **PM** — raw requirements → epic + technical spec + implementation tickets (with traditional and
+    LLM-assisted effort estimates); spec review gate before tickets are pushed to Jira/Plane/file board.
+  - **RFC** — optional pre-build design document (opt-in via `trigger: auto` in project config).
+  - **Research** — code-intel spike; produces a grounded implementation plan per story.
+  - **Coding** — reads the plan, writes/edits files in a git worktree, commits and opens a PR.
+  - **Reviewer** — deep one-pass code review with severity-tagged findings; can auto-merge or gate.
+  - **Fixer** — bounded fix loop; applies reviewer feedback and updates the PR.
+  With no local clone configured, Research/Coding skip gracefully so PM-only runs still complete.
+- **Per-story fan-out** — the story is the unit of execution. Each ticket from the spec becomes one
+  `StoryState` built sequentially (one PR per story). Stories run in dependency order; failed stories
+  can be retried from any step without re-running completed ones.
+- **Story mode** — `single` (default): PM produces one story, one PR; `multiple`: PM decomposes the
+  work, each story gets its own PR. Selectable at run-start; the review gate lets you uncheck stories
+  in multiple mode.
+- **Effort estimates** — each ticket carries a *traditional* estimate (without AI tooling) and an
+  *LLM-assisted* estimate (typically 5–8× faster). Both are shown per-story and totalled across the PM
+  run. See [docs/plan/ash_architecture_and_plan.md §Estimates](docs/plan/ash_architecture_and_plan.md)
+  for the calculation methodology.
 - **Specs go to the Board; code goes to the PR** (kept strictly separate).
-- **Human-in-the-loop is a toggle** (`ApprovalGate`); each ticket runs in its own **git worktree**.
+- **Human-in-the-loop is a toggle** — `trigger: manual` pauses before any agent; `ApprovalGate`
+  gates spec review and optional merge; each ticket runs in its own **git worktree**.
 - The graph is a LangGraph `StateGraph` over one **namespaced** `WorkflowState`; runs are
   checkpointed in Postgres and addressable by `run_id`.
 
@@ -57,26 +76,33 @@ integration ─► intake ─► (intake_mode?)
 
 ```
 src/ash/
-├── api/            # FastAPI app + routes (POST /runs, GET /runs/{id}) + lifespan
-├── web/            # Jinja2 server-rendered UI (dashboard, integrations, start/track runs)
-├── admin/          # SQLAdmin portal at /admin + auth backend
-├── agents/         # BaseAgent + intake + pm/research/coding (real) + reviewer/fixer (stubs)
-├── graph/          # state (namespaced), nodes, checkpointer, builder (conditional), runner
-├── integrations/   # IssueProvider abstraction + GitHub/Jira/Plane providers + registry/service
-├── db/             # SQLAlchemy async (base/session), EncryptedString, models (Integration, RunRecord)
-├── clients/        # boundary clients: async GitHub, git worktrees, gh PRs, board sink, code_intel
-├── toolkits/       # LangChain @tool wrappers over clients (board, codebase)
+├── api/            # FastAPI app + REST routes (POST /runs, GET /runs/{id}) + lifespan
+├── web/            # Jinja2 server-rendered UI (dashboard, runs, PM runs, agents, approvals)
+│                   #   SSE live run timeline · story cards · HITL approve/trigger gates
+├── admin/          # SQLAdmin portal at /admin + DB-backed auth + Connector wizard
+├── agents/         # BaseAgent (LangChain tool loop + structured output) +
+│                   #   intake · pm · rfc · research · coding · reviewer · fixer
+├── graph/          # WorkflowState (namespaced) · LangGraph builder · story fan-out ·
+│                   #   Postgres checkpointer · Runner (start/resume/stop/retry)
+├── integrations/   # IssueProvider + GitHub/Jira/Plane providers + MCP-over-HTTP loader
+├── db/             # SQLAlchemy async · EncryptedString · models (Connector, RunRecord,
+│                   #   SpecRecord, StoryRecord, AgentTask, AgentRunMetric, AgentPolicyRecord)
+├── clients/        # boundary clients: async GitHub, git worktrees, gh PRs, board, code_intel
+├── toolkits/       # LangChain BaseTool wrappers over clients (DevToolkit, board, codebase)
+├── sinks/          # TaskSink abstraction + Jira/Plane/file-board sink implementations
 ├── llm/            # provider-agnostic chat-model factory (Anthropic / OpenAI-compatible)
 ├── config/         # pydantic-settings + projects/<name>.yaml loader (hybrid)
 ├── app_context.py  # composition root (build agents → graph → Runner)
 └── cli.py          # thin local CLI (`ash list`, `ash run`)
-projects/<name>.yaml # per-client/engagement config (repo, board, autonomy, budget)
+projects/<name>.yaml # per-engagement config (repo, board, autonomy, budget, agent policies)
 skills/<name>/SKILL.md
 docs/{plan/,sources/}
-tests/               # pytest + pytest-asyncio (mocked LLM/clients, MemorySaver)
+tests/               # 173 pytest tests (mocked LLM/clients, MemorySaver checkpointer)
 ```
 
 The tool layer is 3 levels: `clients/` (real logic) → `toolkits/` (`BaseTool` wrappers) → agents.
+Orchestration follows **LangGraph-first**: all control flow is graph nodes + conditional edges +
+`interrupt()`-based HITL gates — no bespoke asyncio loops or ad-hoc queues.
 
 Spec-quality standards (the rules the PM agent follows + the org best practices vendored from
 [arbisoft/ai-skillforge](https://github.com/arbisoft/ai-skillforge/tree/main/Claude)) live in
@@ -143,10 +169,16 @@ just check       # all three (what CI runs)
 
 ## Status
 
-Issue-source integrations (GitHub/Jira/Plane), per-run intake routing, the FastAPI surface, the
-Jinja2 UI, and the SQLAdmin portal are in place; orchestration is LangGraph with a Postgres
-checkpointer. PM (spec → Board) is real; Research/Coding produce a grounded plan and a draft fork PR
-when a clone is configured; Reviewer/Fixer are stubs. **Caveat:** code-generation grounding is still
-shallow — review generated PRs; don't trust them blindly. Next: real Reviewer (maker/checker
-separation), the bounded Fixer loop, Alembic migrations, then the scheduled heartbeat. See the plan
-for the full roadmap.
+All six agents (PM, RFC, Research, Coding, Reviewer, Fixer) are production-grade implementations
+sharing the same `BaseAgent` / LangChain tool loop. The full pipeline — from issue intake through
+spec review, per-story fan-out, code generation, review, and fix — runs end-to-end.
+
+**Effort estimates** — each PM ticket carries a *traditional* estimate (dev effort without AI) and
+an *LLM-assisted* estimate. The LLM is instructed to apply a **5–8× speedup factor** reflecting
+real-world productivity gains from AI pair-programming (e.g. traditional `3d` → LLM `0.5d`). Both
+are in the same `Xd`/`Xw`/`Xh` unit so they can be compared directly. Numeric `estimate_days` and
+`llm_estimate_days` fields enable per-run totals in the PM run detail page.
+
+**Caveats:** code-generation grounding is still shallow — review generated PRs; don't trust them
+blindly. Alembic migrations are not yet wired (schema changes use `ADD COLUMN IF NOT EXISTS`
+backfills). See the plan for the full roadmap.

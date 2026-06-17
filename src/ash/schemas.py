@@ -78,9 +78,42 @@ class Ticket(BaseModel):
         description="True if this ticket needs a research spike before it can be implemented; "
         "the Research agent picks these up. PM sets this for unclear/risky work.",
     )
+    # ── Structured detail (decision #27) — force depth instead of a thin one-paragraph blurb.
+    # When the input is a comprehensive spec, PRESERVE its specifics here (model fields, endpoint
+    # paths, task names, file paths) rather than summarising them away.
+    implementation_notes: str = Field(
+        default="",
+        description=(
+            "Detailed, step-by-step implementation approach for this ticket — the 'how'. "
+            "Reference concrete modules/classes/functions, the order of changes, and key design "
+            "decisions or constraints. Carry over relevant specifics from the source spec "
+            "verbatim (model field names, endpoint paths, task/queue names). Several sentences "
+            "to a short list; never a single line."
+        ),
+    )
+    affected_files: list[str] = Field(
+        default_factory=list,
+        description="Specific files/modules/paths this ticket creates or changes (e.g. "
+        "'projects/models.py', 'api/v1/projects/views.py'). Use real paths from the spec/codebase.",
+    )
+    api_changes: list[str] = Field(
+        default_factory=list,
+        description="API endpoints or interface contracts this ticket adds/changes, each as a "
+        "concrete string (e.g. 'POST /api/v1/projects/ → create + queue plan'). Empty if none.",
+    )
+    data_model_changes: list[str] = Field(
+        default_factory=list,
+        description="DB models/fields/migrations this ticket introduces or alters, each concrete "
+        "(e.g. 'Project.shot_plan JSONField', 'Scene.image_status TextChoices'). Empty if none.",
+    )
+    out_of_scope: str = Field(
+        default="",
+        description="What is explicitly NOT part of this ticket, to bound it against the others.",
+    )
     acceptance_criteria: list[str] = Field(
         default_factory=list,
-        description="Testable done-conditions for this ticket. Use an empty list if none.",
+        description="Concrete, testable done-conditions for this ticket (at least 2-3 for a real "
+        "feature). Draw them from the source spec's acceptance criteria where present.",
     )
     dependencies: list[str] = Field(
         default_factory=list,
@@ -90,7 +123,35 @@ class Ticket(BaseModel):
             "(shared infrastructure, data layer, encryption) have none. Use an empty list if none."
         ),
     )
-    estimate: str = Field(default="", description="Rough size, e.g. S/M/L or hours")
+    estimate: str = Field(
+        default="",
+        description=(
+            "Traditional time estimate without AI tooling, e.g. 'S', 'M', 'L', '3d', '1w'. "
+            "Reflect the effort a developer would spend without LLM assistance."
+        ),
+    )
+    estimate_days: float | None = Field(
+        default=None,
+        description=(
+            "Traditional estimate as decimal person-days (for totalling). "
+            "S→0.5, M→2.0, L→5.0; '3d'→3.0; '1w'→5.0; '8h'→1.0; '4h'→0.5."
+        ),
+    )
+    llm_estimate: str = Field(
+        default="",
+        description=(
+            "Estimate with LLM pair-programming. LLM assistance typically delivers a 5–8× "
+            "speedup on implementation tasks (e.g. if traditional estimate is '3d', a realistic "
+            "LLM estimate is '0.4d'). Use the same unit as `estimate`."
+        ),
+    )
+    llm_estimate_days: float | None = Field(
+        default=None,
+        description=(
+            "LLM-assisted estimate as a decimal number of person-days (for totalling). "
+            "Typically estimate_days / 6 — e.g. if estimate_days is 3.0 set this to 0.5."
+        ),
+    )
 
 
 class Severity(str, Enum):

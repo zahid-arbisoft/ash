@@ -35,19 +35,31 @@ def _project_auto() -> ProjectConfig:
     return ProjectConfig(name="plane", agents={"rfc": AgentPolicy(trigger="auto")})
 
 
-def _project_manual() -> ProjectConfig:
-    return ProjectConfig(name="plane")  # default trigger=auto now, but no explicit rfc entry
-
-
 # ── skip cases ────────────────────────────────────────────────────────────────
 
 
-async def test_rfc_skips_when_trigger_not_auto(monkeypatch):
-    """RFC self-skips when not explicitly set to trigger=auto."""
+async def test_rfc_skips_when_manual_trigger_declined(monkeypatch):
+    """RFC (manual, the default) skips when the human declines the trigger (resume != 'run')."""
     cfg = ProjectConfig(name="plane", agents={"rfc": AgentPolicy(trigger="manual")})
     monkeypatch.setattr("ash.agents.base.load_project", lambda n: cfg)
-    update = await RFCAgent(Settings()).run(_state())
+    # override the conftest auto-trigger: the human chose to Skip rather than Trigger
+    monkeypatch.setattr("ash.agents.base.interrupt", lambda _v=None: "skip")
+    update = await RFCAgent(Settings()).run(_state(RawIssue(id="1", title="t", body="b")))
     assert "skipped" in update["rfc"]["note"]
+
+
+async def test_rfc_runs_when_manually_triggered(monkeypatch):
+    """RFC (manual) generates the doc when the human clicks Trigger (conftest interrupt → 'run')."""
+    cfg = ProjectConfig(name="plane", agents={"rfc": AgentPolicy(trigger="manual")})
+    monkeypatch.setattr("ash.agents.base.load_project", lambda n: cfg)
+    doc = RFCDocument(
+        title="RFC-001", background="b", problem_statement="p", proposed_solution="s"
+    )
+    agent = RFCAgent(Settings())
+    agent._generate = AsyncMock(return_value=doc)  # type: ignore[method-assign]
+    update = await agent.run(_state(RawIssue(id="1", title="t", body="b")))
+    assert update["rfc"]["doc"] is not None
+    assert "RFC-001" in update["rfc"]["doc"]
 
 
 async def test_rfc_skips_when_no_brief(monkeypatch):

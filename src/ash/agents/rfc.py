@@ -1,8 +1,9 @@
 """RFC agent — generates a structured RFC document from requirements (plan §10.6).
 
-Runs AFTER pm_publish and BEFORE research. Opt-in: only active when the project
-config sets `agents.rfc.trigger: auto`. Otherwise it self-skips so existing
-pipelines are unaffected.
+Runs AFTER pm_publish and BEFORE research. Gated by the standard trigger policy (default
+**manual**): the run pauses with a "Trigger RFC" control; the human triggers it to generate the
+design doc, or skips it. Set `agents.rfc.trigger: auto` to generate one automatically every run,
+or `enabled: false` to turn it off entirely.
 
 The RFC agent takes the PM spec (or the raw issue for raw_to_dev runs) and
 produces a formal RFC Markdown document (Background, Problem Statement,
@@ -49,20 +50,13 @@ class RFCAgent(BaseAgent):
         resolved = await self._resolve_policy(state)
         if resolved is None:
             return {"rfc": {"note": "skipped: could not load project/policy config"}}
-        project, policy = resolved
+        project, _policy = resolved
 
-        # Opt-in semantics FIRST: RFC only runs when explicitly trigger=auto. Anything
-        # else means "off" — RFC has no manual-trigger gate, so we must skip before
-        # reaching _trigger_gate (which would otherwise interrupt on trigger=manual).
-        if policy.trigger != "auto":
-            return {
-                "rfc": {
-                    "note": "skipped: RFC not enabled "
-                    "(set agents.rfc.trigger: auto in project YAML or UI)"
-                }
-            }
-
-        # trigger is auto here, so the gate only enforces the enabled flag (no interrupt).
+        # RFC follows the standard trigger gate, like every other agent:
+        #   disabled        → skip
+        #   trigger=manual  → interrupt and wait for a human Trigger (or Skip)  [default]
+        #   trigger=auto    → run automatically
+        # (Default is manual, so RFC no longer auto-runs every run; the human triggers it.)
         skip = await self._trigger_gate(state, resolved=resolved)
         if skip is not None:
             return skip

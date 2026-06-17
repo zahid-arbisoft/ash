@@ -146,6 +146,42 @@ async def test_regenerate_specific_story_step_reruns_only_that_story():
     assert state["stories"]["_main"]["pr_url"] == "https://gh/pr/1"
 
 
+async def test_stop_run_cancels_and_resume_completes():
+    """stop_run cancels the in-flight agent and marks the run cancelled; resume_stopped drives it
+    to completion from the checkpoint."""
+    import asyncio
+
+    class BlockOnceCoding:
+        name = "coding"
+
+        def __init__(self) -> None:
+            self.calls = 0
+            self.started = asyncio.Event()
+
+        async def run(self, state):
+            self.calls += 1
+            if self.calls == 1:
+                self.started.set()
+                await asyncio.sleep(3600)  # block until cancelled
+            return {"coding": {"note": "done", "pr_url": "https://gh/pr/1"}}
+
+    coding = BlockOnceCoding()
+    agents = {n: StubAgent(n) for n in ("intake", "pm", "rfc", "research", "reviewer", "fixer")}
+    agents["coding"] = coding
+    agents["pm_publish"] = PMPublishStub()
+    runner = Runner(graph=build_graph(agents, checkpointer=MemorySaver()))
+
+    run_id = await runner.start_run(project="plane", item_id="1", wait=False)
+    await asyncio.wait_for(coding.started.wait(), timeout=5)  # coding is now blocking
+
+    stopped = await runner.stop_run(run_id)
+    assert stopped["status"] == "cancelled"
+
+    state = await runner.resume_stopped(run_id, wait=True)
+    assert state["status"] == "completed"
+    assert coding.calls == 2  # blocked once, re-ran on resume
+
+
 async def test_get_run_state_is_json_serializable_with_spec():
     agents = {n: StubAgent(n) for n in ("intake", "rfc", "research", "coding", "reviewer", "fixer")}
     agents["pm"] = SpecPM()

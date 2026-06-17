@@ -225,14 +225,47 @@ class BaseAgent(ABC):
             return result
         except Exception as exc:  # noqa: BLE001
             msg = str(exc)
+            exc_type = type(exc).__name__
             # LiteLLM / provider guardrails surface as PermissionDeniedError (HTTP 403).
             if "403" in msg or "blocked" in msg.lower() or "guardrail" in msg.lower():
                 raise GuardrailBlockedError(
                     f"LLM gateway blocked the request ({type(exc).__name__}): {msg}"
                 ) from exc
+            # LengthFinishReasonError — model hit max_tokens mid-JSON.  Fall back to a
+            # tool-free _extract call which uses a shorter, neutral system prompt and may
+            # leave just enough room for the output schema.  If the fallback also truncates,
+            # a clear RuntimeError surfaces in the run UI with actionable guidance.
+            ml = msg.lower()
+            is_length_error = (
+                exc_type == "LengthFinishReasonError"
+                or "length limit was reached" in ml
+                or "lengthfinishreason" in ml
+            )
+            if is_length_error:
+                max_tok = self.settings.model_for(self.name).max_tokens
+                logger.warning(
+                    "Agent %s: model hit output token limit (%d max_tokens) — "
+                    "retrying with _extract (shorter prompt). "
+                    "Set LLM_MAX_TOKENS=8192 (or AGENT_%s__MAX_TOKENS=8192) to avoid this.",
+                    self.name, max_tok, self.name.upper(),
+                )
+                try:
+                    return await self._extract(schema, system=system, user=user, notes=None)
+                except Exception as inner:  # noqa: BLE001 — surface a clean error
+                    inner_type = type(inner).__name__
+                    inner_msg = str(inner)
+                    if (
+                        inner_type == "LengthFinishReasonError"
+                        or "length limit was reached" in inner_msg.lower()
+                    ):
+                        raise RuntimeError(
+                            f"Model output truncated at {max_tok} tokens even after fallback. "
+                            f"Increase LLM_MAX_TOKENS (current: {max_tok}) to at least 8192, "
+                            f"or set AGENT_{self.name.upper()}__MAX_TOKENS=8192 for this agent."
+                        ) from exc
+                    raise
             # Any structured-generation / tool-validation failure → last-ditch tool-free
             # structured extraction from the brief alone (degrade rather than crash).
-            ml = msg.lower()
             if (
                 "tool call validation" in ml
                 or "not in request.tools" in ml

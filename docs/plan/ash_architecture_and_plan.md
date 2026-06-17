@@ -345,7 +345,9 @@ A further evolution is a **self-running "harness" mode** modelled directly on Cl
 | 23 | **Every agent has a trigger mode (`auto`/`manual`) + connectors go MCP-first** | New per-agent `trigger` config (`projects/<name>.yaml` `agents:` map, env override `AGENT_<NAME>__TRIGGER`): **auto** = act on detected/assigned work (scheduler/webhook dispatch); **manual** = wait for explicit UI/API trigger. Orthogonal to `Autonomy` (which gates dangerous mid-loop steps). Connectors are reframed **MCP-first** (unlimited platforms via their MCP servers) with the legacy httpx providers kept as a **visible backup** in admin; per-kind config becomes discriminated Pydantic (no free-form JSON), with role/MCP validators and a connection health check; `task_sink_id` is persisted on `RunRecord`. See plan §10.0, §11. |
 | 24 | **Failed runs retry from the failed step, not from scratch** | A run that fails at step X (RFC/Research/Coding/…) can be re-run from X without redoing the successful upstream work. `Runner.retry_run` forks the run's LangGraph checkpoint via `aupdate_state(as_node=<predecessor>)` so X becomes the next node, then `ainvoke(None)` completes the pipeline; each re-run node overwrites its namespace, clearing stale errors. Chosen over (a) marking the whole run dead + starting fresh (loses the spec/plan) and (b) auto-retry loops (a wrong-input failure would just re-fail) — a human inspects the error and clicks **Retry from <step>**. Structured-generation agents already run two-phase (explore→extract) and the explore phase is a hand-rolled `auto`-tool-choice loop, since `create_agent`'s `tool_choice="none"` synthesis turn 400s on Groq `gpt-oss-*`. |
 | 25 | **The build unit is a ticket; Research is optional** | A run can set `ticket_id` to scope the build team (Research → Dev → Reviewer → Fixer) to a single spec ticket on its own branch (`brief()` returns a focused per-ticket brief); blank = build the whole spec as one PR (prior behaviour). Set via the run form or a per-ticket **Build this ticket** button on the spec view. Independently, **Dev no longer depends on Research**: worktree setup is shared (`agents/worktree.py`), and when Research is disabled/skipped Coding creates the worktree itself and builds from the brief with no plan — so a user can turn off the flaky Research agent and still ship. Full per-spec fan-out (auto-spawn one sub-run per ticket) is a later layer; today ticket selection is explicit (form field / button). |
+| 27 | **PM tickets get a per-ticket elaboration pass (depth over a single compressed call)** | A comprehensive uploaded spec was yielding thin, few-line tickets because PM generated the **whole** spec (epic + tech spec + all tickets + risks) in **one** structured call — so each ticket got compressed to fit the output budget (worse on small models like `gpt-4o-mini`). Fix: after the skeleton spec + validation, PM runs a **focused second pass per ticket** (`PMAgent._elaborate_tickets`, gated by `pm_detail_tickets`, source-spec context capped by `pm_detail_context_chars`) so each ticket gets its own generation budget and comes out richly detailed. `Ticket` gains structured detail fields (`implementation_notes`, `affected_files`, `api_changes`, `data_model_changes`, `out_of_scope`) that force depth and feed the build team; the pass is **best-effort + structure-preserving** (keeps the validated id/type/dependencies, falls back to the original ticket on error). Detail propagates to `brief()`/`_ticket_brief`, the file Board, and the PM-run UI. |
 | 26 | **Story = unit of execution; per-story fan-out, retry & regenerate inside one run (LangGraph-first)** | Supersedes #25's "one run = one ticket". The build phase becomes a **per-story subgraph keyed by `ticket_id`** inside a single run: `WorkflowState.stories: dict[ticket_id, StoryState]` (reducer-merged) + `story_order` + a sequential `story_router`→`story_build` loop. Stories run **one by one** in dependency order; each gets its **own PR** (deterministic branch `ash/<run>/<ticket_id>`, persisted `branch`/`pr_url` → Coding/Fixer **update, never duplicate**). PM gains a **single (default) / multiple** stories toggle. **Retry is per-story** (`retry_run(ticket_id, from_step)` re-enters the router → resumes at the failed story, skips completed ones); **manual per-story regenerate** (re-research / regenerate-PR / re-review / re-fix) uses the same fork. RFC is **always one per run**. UI: per-story timeline cards + per-PR progress + top-right PR link/dropdown; RFC Markdown preview + `hx-preserve` collapse fix. Full design: **`docs/plan/per_story_fanout_and_oversight_plan.md`**. |
+| 28 | **Deployment topology = B1 (cloud control plane + local runner daemon)** | Code must never leave the on-prem boundary (data-residency; large repo cost/latency). Cloud runs the control plane (FastAPI + LangGraph + Postgres + UI/Approvals + PM/RFC agents). On-prem runs the **runner daemon** (filesystem access, worktrees, Chroma indexing, git push). Runner dials out to control plane (no inbound AWS ports); only extracted code snippets reach the LLM vendor. B2 (GitHub Actions) rejected: designed for CI, not interactive HITL agent loops. **Gated on Alembic migrations** (remove `_PG_COLUMN_BACKFILLS` stopgap) before runner seam work starts. Full analysis + retrieval quality roadmap + Deep Agents placement: **`docs/plan/deployment_topology_and_code_extraction_plan.md`**. |
 
 ### 7a. Repo topology — configurable per project
 
@@ -537,6 +539,62 @@ Don't remove a gate until the thing under it has earned it.
 ## 11. Changelog
 
 Per the working agreement (top of doc), every decision/implementation change is logged here.
+
+- **2026-06-18 — LangChain/LangGraph ecosystem usage doc added.**
+  Created `docs/plan/langchain_langgraph_usage.md`: comprehensive inventory of every LangGraph
+  and LangChain primitive in use (StateGraph topology, WorkflowState reducers, AsyncPostgresSaver
+  checkpointer, `interrupt`/`Command` HITL gates, `aupdate_state` retry, `create_agent` ReAct
+  loop, `with_structured_output`, message types, LLM factory, toolkits, MCP adapters) plus a
+  pending-work section (P1 MCP tool binding, P2 Send/parallel fan-out, P3 streaming, P4
+  research sinks, P5 Instructor fallback) and a quick-reference table. Companion fix: `base.py`
+  now catches `LengthFinishReasonError` and falls back to `_extract`; `pm.py` skips the
+  per-ticket elaborate pass and injects a COMPACT MODE note when `LLM_MAX_TOKENS ≤ 4096`.
+  174 tests green, ruff + mypy --strict clean.
+
+- **2026-06-18 — Deployment topology + code-extraction quality + Deep Agents analysis (decision #28).**
+  Three topologies evaluated for running ASH against large repos (edx-platform, plane) without
+  pulling code to the cloud. **Decision #28 = Topology B1** (cloud control plane + on-prem runner
+  daemon): the control plane (FastAPI/LangGraph/Postgres/UI) runs on AWS; a runner daemon on the
+  developer's machine holds filesystem access, worktrees, and Chroma indexing; only extracted code
+  snippets go to the LLM vendor. Code never leaves the on-prem boundary. B2 (GitHub Actions) was
+  rejected for HITL-loop reasons. Code-extraction quality of the current Research/Coding agents
+  scored at **~38 / 100** vs Claude Code (100): strong toolkit but gaps in structural repo map
+  (biggest deficit), loop depth, symbol precision, and hybrid retrieval. Improvement roadmap:
+  **R1** tree-sitter repo map (+17 pts → ~55), **R2** BM25+Chroma hybrid + reranker (+8 → ~63),
+  **R3** symbol index (+7 → ~70), **R4** context budget + summarization middleware (+8 → ~78).
+  **Deep Agents analysis:** `langchain-deepagents` fits as the inner-loop engine for
+  Research/Coding nodes (nested via `create_deep_agent`, not at macro-graph level); provides
+  planning tool + sub-agent context quarantine + virtual-FS scratchpad; complements but does NOT
+  replace the retrieval substrate. Sequencing: build R1 first (biggest gain, engine-agnostic),
+  then swap `BaseAgent._explore` for a deepagents loop driving those tools. Pluggable coding
+  engine seam documented (`ash`/`deepagents`/`aider`/`claude` per project). Implementation gated
+  on Alembic migrations. Full analysis: **`docs/plan/deployment_topology_and_code_extraction_plan.md`**.
+
+- **2026-06-17 — Default trigger flipped to `manual` (except PM) + per-agent Trigger UI.**
+  `AgentPolicy.trigger` default is now **`manual`**; `ProjectConfig.agent_policy` returns `auto`
+  only for agents in `DEFAULT_AUTO_TRIGGER_AGENTS` (just **PM**, so it still runs automatically to
+  produce the spec). Every downstream agent (Research/Coding/Reviewer/Fixer; RFC stays opt-in) now
+  waits for an explicit human trigger unless a project YAML / DB override opts it into `auto`.
+  **UI:** the run page's per-story stage rows show a **manual** chip on manual stages and a live
+  **▶ Trigger** button on the exact stage the graph is paused at (`pending_trigger`+`pending_story`),
+  in addition to the existing top banner; a new `_agent_triggers` route helper resolves
+  (DB>YAML>default) trigger modes into the timeline (`run_status`/SSE/decide render sites). The
+  Agents overview + detail already reflect the resolved default. **Tests:** agent unit tests call
+  `run()` outside a graph runtime, so a new `tests/agents/conftest.py` autouse fixture simulates the
+  human trigger (`ash.agents.base.interrupt` → `"run"`); +2 config tests for the new default. 171
+  pytest green, ruff + mypy --strict clean.
+
+- **2026-06-17 — IMPLEMENTED: PM ticket depth via per-ticket elaboration (decision #27).** A
+  comprehensive uploaded spec produced thin tickets because the whole spec was generated in one
+  structured call (each ticket compressed to fit the output budget — pronounced on `gpt-4o-mini`).
+  Added `PMAgent._elaborate_tickets`: after the skeleton + validation, a focused second pass
+  expands each ticket with its own budget, feeding the (capped) source spec so `spec_ready` runs
+  carry the provided detail verbatim. `Ticket` gained `implementation_notes`, `affected_files`,
+  `api_changes`, `data_model_changes`, `out_of_scope`; rendered into `_ticket_brief`, the file Board
+  (`clients/board.py`), and the PM-run detail UI. Best-effort + structure-preserving (forces
+  id/type/deps back to the validated skeleton; keeps the original ticket on any per-ticket failure,
+  so existing single-shot PM tests stay green). Gated by `pm_detail_tickets` (default on) +
+  `pm_detail_context_chars`. +1 test. 169 pytest green, ruff + mypy --strict clean.
 
 - **2026-06-17 — Research indexing guardrail + onboarding runbook.** (1) On a large repo the
   Research agent sat in `chroma.index_directory` (local ONNX embeddings) for minutes before its

@@ -5,7 +5,8 @@
 {%- set pending = state.pending_review or status == "awaiting_review" -%}
 {%- set tone = {"completed":"bg-ok/15 text-ok","failed":"bg-danger/15 text-danger",
                 "awaiting_review":"bg-warn/15 text-warn","awaiting_merge":"bg-ok/15 text-ok",
-                "awaiting_trigger":"bg-accent/15 text-accent","running":"bg-accent/15 text-accent"} -%}
+                "awaiting_trigger":"bg-accent/15 text-accent","running":"bg-accent/15 text-accent",
+                "cancelled":"bg-border text-muted"} -%}
 {%- set _order = state.story_order or (state.stories or {}).keys()|list -%}
 {%- set _stories = state.stories or {} -%}
 {%- set _metrics = metrics if metrics is defined else {"totals":{},"by_story":{}} -%}
@@ -26,6 +27,14 @@
   {% if state.story_mode %}<span class="text-xs px-2 py-0.5 rounded-full bg-border text-muted">{{ state.story_mode }} story</span>{% endif %}
 
   <span class="ml-auto flex items-center gap-3">
+    {# ── Stop a running agent (decision #26) ── #}
+    {% if status == "running" %}
+    <button hx-post="/ui/runs/{{ run_id }}/stop" hx-target="#run-timeline" hx-swap="innerHTML"
+            title="Stop the running agent (the run can be resumed later)"
+            class="text-xs font-semibold px-2.5 py-1 rounded-full border border-danger/50 text-danger hover:bg-danger/10">
+      ◼ Stop
+    </button>
+    {% endif %}
     {# ── PR link(s), top-right (decision #26) ── #}
     {% if prs|length == 1 %}
       <a href="{{ prs[0][1] }}" target="_blank"
@@ -73,9 +82,12 @@
     Review the generated spec below, then approve to build {% if _spec and _spec.tickets and _spec.tickets|length > 1 %}the selected stories one by one (each gets its own PR){% else %}this story{% endif %},
     or reject to cancel without pushing anything.
   </p>
-  {# The checkboxes + buttons live in one form; htmx includes the checked story ids on approve. #}
+  {# The checkboxes + buttons live in one form; htmx includes the checked story ids on approve.
+     In single-story mode the selection is enforced server-side (first non-spike ticket) so we
+     skip the checkbox list to avoid confusing the user with options that are ignored. #}
+  {%- set _single_mode = state.story_mode == "single" -%}
   <form>
-    {% if _spec and _spec.tickets and _spec.tickets|length > 1 %}
+    {% if _spec and _spec.tickets and _spec.tickets|length > 1 and not _single_mode %}
     <div class="text-xs uppercase tracking-wide text-muted mb-2">Stories to build (uncheck to skip)</div>
     <div class="space-y-2 mb-4">
       {% for t in _spec.tickets %}
@@ -84,16 +96,33 @@
         <span class="leading-snug"><span class="font-mono text-xs text-accent">{{ t.id }}</span>
           <span class="font-medium">{{ t.title }}</span>
           {% if t.needs_research %}<span class="text-[10px] px-1.5 py-0.5 rounded bg-warn/15 text-warn ml-1">spike</span>{% endif %}
+          {%- if t.estimate or t.llm_estimate %}
+          <span class="text-[10px] text-muted ml-1">{{ t.estimate }}{% if t.llm_estimate %} · ⚡{{ t.llm_estimate }}{% endif %}</span>
+          {%- endif %}
         </span>
       </label>
       {% endfor %}
+    </div>
+    {% elif _single_mode and _spec and _spec.tickets %}
+    {# Single mode: show the first ticket that will be built, read-only #}
+    {%- set _first = _spec.tickets[0] -%}
+    <div class="flex items-center gap-2 mb-4 text-sm">
+      <span class="font-mono text-xs text-accent">{{ _first.id }}</span>
+      <span class="font-medium">{{ _first.title }}</span>
+      {% if _first.needs_research %}<span class="text-[10px] px-1.5 py-0.5 rounded bg-warn/15 text-warn">spike</span>{% endif %}
+      {%- if _first.estimate or _first.llm_estimate %}
+      <span class="text-[10px] text-muted">{{ _first.estimate }}{% if _first.llm_estimate %} · ⚡{{ _first.llm_estimate }}{% endif %}</span>
+      {%- endif %}
+      <span class="text-[10px] text-muted/60">(single story — one PR)</span>
     </div>
     {% endif %}
     <div class="flex gap-2">
       <button hx-post="/ui/runs/{{ run_id }}/approve" hx-include="closest form"
               hx-target="#run-timeline" hx-swap="innerHTML"
               class="bg-ok text-bg font-semibold text-sm rounded-lg px-4 h-9 hover:brightness-110">
-        {% if _spec and _spec.tickets and _spec.tickets|length > 1 %}Approve &amp; build selected{% else %}Approve &amp; push tickets{% endif %}
+        {% if _single_mode %}Approve &amp; build story
+        {% elif _spec and _spec.tickets and _spec.tickets|length > 1 %}Approve &amp; build selected
+        {% else %}Approve &amp; push tickets{% endif %}
       </button>
       <button hx-post="/ui/runs/{{ run_id }}/reject" hx-target="#run-timeline" hx-swap="innerHTML"
               class="border border-danger/50 text-danger font-semibold text-sm rounded-lg px-4 h-9 hover:bg-danger/10">
@@ -109,12 +138,18 @@
 <div class="border border-accent/40 bg-accent/5 rounded-xl p-5 mb-5">
   <h3 class="font-semibold text-accent mb-1 capitalize">{{ state.pending_trigger }} agent ready{% if state.pending_story %} · story {{ state.pending_story }}{% endif %}</h3>
   <p class="text-sm text-muted mb-4">
-    The <strong class="capitalize">{{ state.pending_trigger }}</strong> agent is configured for manual trigger. Click <em>Trigger</em> to start it.
+    The <strong class="capitalize">{{ state.pending_trigger }}</strong> agent is set to manual trigger. Click <em>Trigger</em> to run it, or <em>Skip</em> to move on.
   </p>
-  <button hx-post="/ui/runs/{{ run_id }}/trigger" hx-target="#run-timeline" hx-swap="innerHTML"
-          class="bg-accent text-bg font-semibold text-sm rounded-lg px-4 h-9 hover:brightness-110">
-    Trigger {{ state.pending_trigger | capitalize }}
-  </button>
+  <div class="flex gap-2">
+    <button hx-post="/ui/runs/{{ run_id }}/trigger" hx-target="#run-timeline" hx-swap="innerHTML"
+            class="bg-accent text-bg font-semibold text-sm rounded-lg px-4 h-9 hover:brightness-110">
+      Trigger {{ state.pending_trigger | capitalize }}
+    </button>
+    <button hx-post="/ui/runs/{{ run_id }}/skip" hx-target="#run-timeline" hx-swap="innerHTML"
+            class="border border-border text-muted font-semibold text-sm rounded-lg px-4 h-9 hover:text-fg">
+      Skip
+    </button>
+  </div>
 </div>
 {% endif %}
 
@@ -129,6 +164,20 @@
     <button hx-post="/ui/runs/{{ run_id }}/reject" hx-target="#run-timeline" hx-swap="innerHTML"
             class="border border-danger/50 text-danger font-semibold text-sm rounded-lg px-4 h-9 hover:bg-danger/10">Reject</button>
   </div>
+</div>
+{% endif %}
+
+{# ── Stopped/cancelled run → resume from the last checkpoint ── #}
+{% if status == "cancelled" %}
+<div class="border border-border bg-elevate/40 rounded-xl p-5 mb-5">
+  <h3 class="font-semibold mb-1">Run stopped</h3>
+  <p class="text-sm text-muted mb-4">The running agent was stopped. The progress so far is saved —
+    resume to continue from the last checkpoint, or re-run a single story from its card below.</p>
+  <form method="post" action="/ui/runs/{{ run_id }}/resume-run">
+    <button type="submit" class="bg-accent text-bg font-semibold text-sm rounded-lg px-4 h-9 hover:brightness-110">
+      ▶ Resume run
+    </button>
+  </form>
 </div>
 {% endif %}
 
@@ -156,6 +205,9 @@
   {{- "error" if sub.error else ("skipped" if (sub.note and "skipped" in sub.note)
        else ("done" if has_output else ("running" if running_hint else "pending"))) -}}
 {%- endmacro -%}
+{# db_running(agent): true if the DB task status for this agent is in_progress. Used in
+   story_stage to catch Reviewer/Fixer running state that the heuristic hints can miss. #}
+{%- macro db_running(agent) -%}{{ _ts.get(agent) == "in_progress" }}{%- endmacro -%}
 {%- set ICON = {"done":"✓","error":"✕","skipped":"⊘","pending":"○","running":"◉"} -%}
 {%- set COL = {"done":"text-ok border-ok/40","error":"text-danger border-danger/40",
                "skipped":"text-muted border-border","pending":"text-muted/50 border-border",
@@ -164,7 +216,7 @@
 {% macro run_stage(label, sub, has_output, agent_key, desc) %}
   {%- set db_st = _ts.get(agent_key, "") -%}
   {%- set st = stat(sub, has_output, db_st == "in_progress")|trim -%}
-  <li class="flex gap-3 py-3">
+  <li class="flex gap-3 py-3 items-start">
     <span class="shrink-0 w-7 h-7 rounded-full border grid place-items-center text-sm {{ COL[st] }}{% if st == 'running' %} animate-pulse{% endif %}">{{ ICON[st] }}</span>
     <div class="min-w-0 flex-1">
       <div class="flex items-center gap-2 flex-wrap">
@@ -178,19 +230,37 @@
       {% if sub.error %}<p class="text-xs text-danger mt-0.5">{{ sub.error }}</p>
       {% elif sub.note %}<p class="text-xs text-muted mt-0.5">{{ sub.note }}</p>{% endif %}
     </div>
+    {# Retry button — visible once the agent has finished (has output or error) and the run is not actively building #}
+    {% if (has_output or sub.error) and agent_key in ("pm", "rfc") and status not in ("running", "awaiting_trigger") %}
+    <form method="post" action="/ui/runs/{{ run_id }}/retry" class="shrink-0">
+      <input type="hidden" name="from_step" value="{{ agent_key }}">
+      <button type="submit" title="Re-run {{ label }} to improve results"
+              class="text-xs font-medium px-2.5 py-1 rounded border border-accent/40 text-accent hover:bg-accent/10 flex items-center gap-1">↻ Retry</button>
+    </form>
+    {% endif %}
   </li>
 {% endmacro %}
 
-{# Per-story stage row, with a metric chip from analytics and a per-step regenerate control. #}
+{# Per-story stage row: status, analytics chip, manual-trigger control, and per-step regenerate.
+   `triggers` (agent → "auto"|"manual") drives the manual badge; the row that the graph is paused
+   on (pending_trigger == agent AND pending_story == ticket) gets a live Trigger button. #}
+{%- set _triggers = triggers if triggers is defined else {} -%}
 {% macro story_stage(label, sub, has_output, ticket, agent, running_hint) %}
-  {%- set st = stat(sub, has_output, running_hint)|trim -%}
+  {%- set _db_running = _ts.get(agent) == "in_progress" -%}
+  {%- set st = stat(sub, has_output, running_hint or _db_running)|trim -%}
   {%- set m = (_by_story.get(ticket) or {}).get(agent) or {} -%}
+  {%- set is_manual = _triggers.get(agent) == "manual" -%}
+  {%- set awaiting = (state.status == "awaiting_trigger" and state.pending_trigger == agent
+                      and (state.pending_story or "") == ticket) -%}
   <li class="flex gap-3 py-2.5 items-start">
-    <span class="shrink-0 w-7 h-7 rounded-full border grid place-items-center text-sm {{ COL[st] }}{% if st == 'running' %} animate-pulse{% endif %}">{{ ICON[st] }}</span>
+    <span class="shrink-0 w-7 h-7 rounded-full border grid place-items-center text-sm {{ 'text-accent border-accent/60 animate-pulse' if awaiting else COL[st] }}{% if st == 'running' and not awaiting %} animate-pulse{% endif %}">{{ '▶' if awaiting else ICON[st] }}</span>
     <div class="min-w-0 flex-1">
       <div class="flex items-center gap-2 flex-wrap">
         <span class="text-sm font-medium">{{ label }}</span>
-        <span class="text-[11px] uppercase tracking-wide text-muted/60">{{ st }}</span>
+        <span class="text-[11px] uppercase tracking-wide {{ 'text-accent' if awaiting else 'text-muted/60' }}">{{ 'awaiting trigger' if awaiting else st }}</span>
+        {%- if is_manual and not awaiting and st in ('pending', 'running') %}
+        <span class="text-[10px] px-1.5 py-0.5 rounded bg-border text-muted" title="runs only on manual trigger">manual</span>
+        {%- endif %}
         {%- if m.total_tokens %}
         <span class="ml-auto font-mono text-[11px] text-muted/60 tabular-nums" title="tokens · time">{{ "{:,}".format(m.total_tokens) }}t · {{ "%.1f"|format((m.duration_ms or 0)/1000) }}s</span>
         {%- endif %}
@@ -198,12 +268,24 @@
       {% if sub.error %}<p class="text-xs text-danger mt-1 line-clamp-3">{{ sub.error }}</p>
       {% elif sub.note %}<p class="text-xs text-muted/80 mt-1 line-clamp-2">{{ sub.note }}</p>{% endif %}
     </div>
-    {# per-step regenerate #}
-    <form method="post" action="/ui/runs/{{ run_id }}/stories/{{ ticket }}/rerun" class="shrink-0">
-      <input type="hidden" name="step" value="{{ agent }}">
-      <button type="submit" title="Re-run {{ label }} for this story"
-              class="text-xs px-2 py-1 rounded border border-border text-muted hover:text-accent hover:border-accent/50">↻</button>
-    </form>
+    <div class="shrink-0 flex items-center gap-1.5">
+      {% if awaiting %}
+      {# This stage is paused waiting for a human — Trigger runs it, Skip moves past it. #}
+      <button hx-post="/ui/runs/{{ run_id }}/trigger" hx-target="#run-timeline" hx-swap="innerHTML"
+              class="text-xs font-semibold px-2.5 py-1 rounded bg-accent text-bg hover:brightness-110">
+        ▶ Trigger
+      </button>
+      <button hx-post="/ui/runs/{{ run_id }}/skip" hx-target="#run-timeline" hx-swap="innerHTML"
+              title="Skip this agent and continue"
+              class="text-xs px-2 py-1 rounded border border-border text-muted hover:text-fg">Skip</button>
+      {% endif %}
+      {# per-step regenerate (re-run this agent for this story) #}
+      <form method="post" action="/ui/runs/{{ run_id }}/stories/{{ ticket }}/rerun">
+        <input type="hidden" name="step" value="{{ agent }}">
+        <button type="submit" title="Re-run {{ label }} for this story"
+                class="text-xs font-medium px-2.5 py-1 rounded border border-accent/40 text-accent hover:bg-accent/10 flex items-center gap-1">↻ Retry</button>
+      </form>
+    </div>
   </li>
 {% endmacro %}
 
@@ -221,7 +303,10 @@
 {% set spec = (state.pm or {}).spec %}
 {% if spec %}
 <section class="bg-surface border border-border rounded-xl p-5 mb-5">
-  <h3 class="font-semibold mb-1">{{ spec.epic.title }}</h3>
+  <div class="flex items-start justify-between gap-3 mb-1">
+    <h3 class="font-semibold">{{ spec.epic.title }}</h3>
+    <a href="/ui/pm-runs/{{ run_id }}" class="shrink-0 text-xs text-accent hover:underline">PM — spec &amp; tickets →</a>
+  </div>
   <p class="text-sm text-muted mb-3">{{ spec.epic.summary }}</p>
   {% if spec.epic.acceptance_criteria %}
   <div class="text-sm mb-3">
@@ -294,6 +379,11 @@
 </section>
 {% endif %}
 
+{# ── Ticket lookup map (spec tickets by id, for story cards) ── #}
+{%- set _spec_tickets = ((state.pm or {}).get("spec") or {}).get("tickets") or [] -%}
+{%- set _tmap = {} -%}
+{%- for _t in _spec_tickets -%}{{ _tmap.update({_t.id: _t}) or "" }}{%- endfor -%}
+
 {# ── Per-story build (decision #26) ── #}
 {% if _order %}
 {%- set done_count = _order|select("in", _stories)|map("string")|list -%}
@@ -308,11 +398,19 @@
   {% set sstat = s.status or "pending" %}
   {% set stone = {"completed":"text-ok","failed":"text-danger","running":"text-accent","pending":"text-muted/60","skipped":"text-muted"} %}
   <div class="bg-surface border {{ 'border-danger/40' if sstat == 'failed' else 'border-border' }} rounded-xl p-5">
+    {%- set _td = _tmap.get(tid) -%}
     <div class="flex items-center gap-2.5 mb-3 flex-wrap">
       <span class="font-mono text-sm text-accent">{{ tid }}</span>
       <span class="text-base font-medium">{{ s.title or "story" }}</span>
       <span class="text-xs uppercase tracking-wide {{ stone.get(sstat,'text-muted') }}">{{ sstat }}{% if sstat == "running" %} <span class="animate-pulse">●</span>{% endif %}</span>
       {% if s.deps %}<span class="text-xs text-muted/60">depends on {{ s.deps|join(", ") }}</span>{% endif %}
+      {# Estimates from ticket spec #}
+      {%- if _td and (_td.estimate or _td.llm_estimate) %}
+      <span class="flex items-center gap-1 text-[11px]">
+        {%- if _td.estimate %}<span class="text-muted/70" title="Traditional estimate">{{ _td.estimate }}</span>{%- endif %}
+        {%- if _td.llm_estimate %}<span class="px-1.5 py-0.5 rounded bg-ok/15 text-ok font-medium" title="With LLM assistance">⚡ {{ _td.llm_estimate }}</span>{%- endif %}
+      </span>
+      {%- endif %}
       <span class="ml-auto flex items-center gap-2">
         {% if s.pr_url %}<a href="{{ s.pr_url }}" target="_blank" class="text-xs px-2.5 py-1 rounded bg-accent/15 text-accent hover:bg-accent/25">PR ↗</a>{% endif %}
         {% if sstat == "failed" %}
@@ -323,12 +421,33 @@
         {% endif %}
       </span>
     </div>
+    {# Collapsible ticket details from the PM spec #}
+    {%- if _td and (_td.description or _td.implementation_notes or _td.acceptance_criteria) %}
+    <details class="group mb-3 -mt-1" data-key="td-{{ tid }}">
+      <summary class="cursor-pointer text-[11px] text-muted/60 hover:text-muted select-none">▸ Ticket details</summary>
+      <div class="mt-2 space-y-2 text-xs text-muted border-l-2 border-border pl-3">
+        {% if _td.description %}<p class="leading-relaxed">{{ _td.description }}</p>{% endif %}
+        {% if _td.implementation_notes %}
+        <div><span class="text-fg font-medium">Implementation:</span> <span class="leading-relaxed">{{ _td.implementation_notes }}</span></div>
+        {% endif %}
+        {% if _td.acceptance_criteria %}
+        <div><span class="text-fg font-medium">Acceptance:</span>
+          <ul class="list-disc list-inside mt-0.5 space-y-0.5">{% for ac in _td.acceptance_criteria %}<li>{{ ac }}</li>{% endfor %}</ul>
+        </div>
+        {% endif %}
+        {% if _td.affected_files %}
+        <div><span class="text-fg font-medium">Files:</span> {% for f in _td.affected_files %}<code class="text-accent">{{ f }}</code>{% if not loop.last %}, {% endif %}{% endfor %}</div>
+        {% endif %}
+        {% if _td.out_of_scope %}<div><span class="text-fg font-medium">Out of scope:</span> {{ _td.out_of_scope }}</div>{% endif %}
+      </div>
+    </details>
+    {%- endif %}
     {%- set r = s.research or {} -%}{%- set c = s.coding or {} -%}{%- set rv = s.reviewer or {} -%}{%- set fx = s.fixer or {} -%}
     <ol class="divide-y divide-border/40 border-t border-border/40">
       {{ story_stage("Research", r, r.plan or (r.note and 'skipped' in (r.note or '')), tid, "research", sstat == "running" and not (r.plan or r.note)) }}
       {{ story_stage("Dev — code & PR", c, c.change or c.pr_url, tid, "coding", sstat == "running" and (r.plan or r.note) and not (c.change or c.pr_url)) }}
-      {{ story_stage("Reviewer", rv, rv.review, tid, "reviewer", false) }}
-      {{ story_stage("Fixer", fx, fx.change or (fx.note and 'skipped' in (fx.note or '')), tid, "fixer", false) }}
+      {{ story_stage("Reviewer", rv, rv.review, tid, "reviewer", sstat == "running" and (c.change or c.pr_url) and not rv.review) }}
+      {{ story_stage("Fixer", fx, fx.change or (fx.note and 'skipped' in (fx.note or '')), tid, "fixer", sstat == "running" and rv.review and not (fx.change or (fx.note and 'skipped' in (fx.note or '')))) }}
     </ol>
     {# Review findings for this story #}
     {% set review = rv.review %}

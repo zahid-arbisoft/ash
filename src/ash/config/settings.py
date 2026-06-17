@@ -149,6 +149,14 @@ class Settings(BaseSettings):
     index_max_files: int = 1_500
     index_progress_every: int = 500
 
+    # PM ticket depth (decision #27) — after generating the spec skeleton, run a focused
+    # second pass per ticket so each gets its own output budget and comes out richly detailed
+    # (instead of being compressed to fit one all-in-one structured response). Disable to keep
+    # PM to a single call. `pm_detail_context_chars` caps how much of the source spec is fed
+    # into each per-ticket elaboration call.
+    pm_detail_tickets: bool = True
+    pm_detail_context_chars: int = 24_000
+
     # logging
     log_level: str = "INFO"
 
@@ -223,6 +231,10 @@ class AgentPolicy(BaseModel):
     `manual` = human must click Trigger in the UI. Orthogonal to `Autonomy` (which gates
     dangerous mid-loop steps like merge/push).
 
+    Default is **`manual`** for every agent except PM (see `DEFAULT_AUTO_TRIGGER_AGENTS` /
+    `ProjectConfig.agent_policy`): PM runs automatically to produce the spec, then each downstream
+    agent waits for an explicit human Trigger unless a project/DB override opts it into `auto`.
+
     Dispatch limits:
       `concurrency_limit` — max simultaneous in_progress tasks for this agent.
       `daily_quota`       — max tasks completed per calendar day (None = unlimited).
@@ -231,7 +243,7 @@ class AgentPolicy(BaseModel):
     DB overrides (AgentPolicyRecord) take precedence over YAML values.
     """
 
-    trigger: TriggerMode = "auto"
+    trigger: TriggerMode = "manual"
     enabled: bool = True
     concurrency_limit: int = 1
     daily_quota: int | None = None
@@ -248,6 +260,10 @@ KNOWN_AGENTS: tuple[str, ...] = (
     "fixer",
     "rfc",
 )
+
+# Agents that default to `auto` trigger (run without a manual click). Only PM — it must produce
+# the spec automatically; everything downstream defaults to `manual` so a human gates each step.
+DEFAULT_AUTO_TRIGGER_AGENTS: frozenset[str] = frozenset({"pm"})
 
 
 class Budget(BaseModel):
@@ -274,8 +290,13 @@ class ProjectConfig(BaseModel):
         return RUNTIME_DIR / self.name
 
     def agent_policy(self, name: str) -> AgentPolicy:
-        """The policy for an agent, falling back to the default (manual trigger, enabled)."""
-        return self.agents.get(name, AgentPolicy())
+        """The policy for an agent. Explicit YAML entry wins; otherwise the default is
+        `manual` trigger for every agent except those in `DEFAULT_AUTO_TRIGGER_AGENTS` (PM)."""
+        if name in self.agents:
+            return self.agents[name]
+        if name in DEFAULT_AUTO_TRIGGER_AGENTS:
+            return AgentPolicy(trigger="auto")
+        return AgentPolicy()
 
 
 def load_project(name: str) -> ProjectConfig:

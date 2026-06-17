@@ -288,15 +288,47 @@ async def _run_metrics(run_id: str) -> dict[str, Any]:
     return out
 
 
+async def _agent_triggers(project: str) -> dict[str, str]:
+    """Resolved trigger mode (DB > YAML > default) per agent, for the run page's manual-trigger
+    controls. Best-effort: empty dict if config/DB unavailable."""
+    out: dict[str, str] = {}
+    if not project:
+        return out
+    try:
+        from ash.config.settings import KNOWN_AGENTS, load_project
+
+        proj = load_project(project)
+    except Exception:  # noqa: BLE001
+        return out
+    try:
+        from ash.db.base import get_sessionmaker
+        from ash.db.tasks import resolve_policy
+
+        async with get_sessionmaker()() as session:
+            for name in KNOWN_AGENTS:
+                out[name] = (await resolve_policy(session, proj, name)).trigger
+    except Exception:  # noqa: BLE001 — no DB → fall back to YAML/defaults
+        for name in KNOWN_AGENTS:
+            out[name] = proj.agent_policy(name).trigger
+    return out
+
+
 @router.get("/ui/runs/{run_id}", response_class=HTMLResponse)
 async def run_status(request: Request, run_id: str) -> HTMLResponse:
     state = await _runner(request).get_run(run_id)
     ts = await _task_statuses(run_id)
     metrics = await _run_metrics(run_id)
+    triggers = await _agent_triggers((state or {}).get("project", ""))
     return templates.TemplateResponse(
         request,
         "run_status.html",
-        {"run_id": run_id, "state": state, "task_statuses": ts, "metrics": metrics},
+        {
+            "run_id": run_id,
+            "state": state,
+            "task_statuses": ts,
+            "metrics": metrics,
+            "triggers": triggers,
+        },
     )
 
 
@@ -310,7 +342,7 @@ def _sse(data: str, *, event: str | None = None) -> str:
     return "\n".join(lines) + "\n\n"
 
 
-_TERMINAL = {"completed", "failed"}
+_TERMINAL = {"completed", "failed", "cancelled"}
 
 
 @router.get("/ui/runs/{run_id}/events")
@@ -326,9 +358,14 @@ async def run_events(request: Request, run_id: str) -> StreamingResponse:
             state = await runner.get_run(run_id)
             ts = await _task_statuses(run_id)
             metrics = await _run_metrics(run_id)
+            triggers = await _agent_triggers((state or {}).get("project", ""))
             yield _sse(
                 timeline.render(
-                    run_id=run_id, state=state or {}, task_statuses=ts, metrics=metrics
+                    run_id=run_id,
+                    state=state or {},
+                    task_statuses=ts,
+                    metrics=metrics,
+                    triggers=triggers,
                 ),
                 event="message",
             )
@@ -341,16 +378,30 @@ async def run_events(request: Request, run_id: str) -> StreamingResponse:
     return StreamingResponse(gen(), media_type="text/event-stream")
 
 
-async def _decide(request: Request, run_id: str, decision: Any) -> HTMLResponse:
-    await _runner(request).resume_run(run_id, decision)
+async def _render_timeline(request: Request, run_id: str) -> HTMLResponse:
+    """Render the run-timeline partial for the current run state (HTMX innerHTML swap)."""
     state = await _runner(request).get_run(run_id)
     ts = await _task_statuses(run_id)
     metrics = await _run_metrics(run_id)
+    triggers = await _agent_triggers((state or {}).get("project", ""))
     return templates.TemplateResponse(
         request,
         "_run_timeline.html",
-        {"run_id": run_id, "state": state or {}, "task_statuses": ts, "metrics": metrics},
+        {
+            "run_id": run_id,
+            "state": state or {},
+            "task_statuses": ts,
+            "metrics": metrics,
+            "triggers": triggers,
+        },
     )
+
+
+async def _decide(
+    request: Request, run_id: str, decision: Any, *, background: bool = False
+) -> HTMLResponse:
+    await _runner(request).resume_run(run_id, decision, background=background)
+    return await _render_timeline(request, run_id)
 
 
 @router.post("/ui/runs/{run_id}/approve", response_class=HTMLResponse)
@@ -371,8 +422,76 @@ async def run_reject(request: Request, run_id: str) -> HTMLResponse:
 
 @router.post("/ui/runs/{run_id}/trigger", response_class=HTMLResponse)
 async def run_trigger_agent(request: Request, run_id: str) -> HTMLResponse:
-    """Resume a run paused at a manual-trigger gate (A4). decision='run' activates the agent."""
-    return await _decide(request, run_id, "run")
+    """Resume a run paused at a manual-trigger gate (A4). decision='run' activates the agent.
+
+    Runs in the background so the (potentially long) agent doesn't block the request and can be
+    stopped mid-run; the timeline streams progress over SSE.
+
+    The trigger/skip buttons are cleared immediately in the response (before the background task
+    updates the checkpoint) so they don't linger; SSE delivers the real in-progress state within
+    ~1.5 s."""
+    runner = _runner(request)
+    state = dict(await runner.get_run(run_id) or {})
+    triggered_agent: str = state.get("pending_trigger") or ""
+    triggered_story: str = state.get("pending_story") or ""
+
+    # Start the agent in the background — does not wait for it to finish.
+    await runner.resume_run(run_id, "run", background=True)
+
+    # Override state so the Trigger/Skip UI disappears instantly; SSE corrects within 1-2 ticks.
+    state["pending_trigger"] = None
+    state["pending_story"] = None
+    state["status"] = "running"
+    # Flip the relevant story to "running" so the story card reflects the change.
+    stories = state.get("stories") or {}
+    if triggered_story and triggered_story in stories:
+        story = stories[triggered_story]
+        if hasattr(story, "model_copy"):
+            stories[triggered_story] = story.model_copy(update={"status": "running"})
+        elif isinstance(story, dict):
+            stories[triggered_story] = {**story, "status": "running"}
+
+    ts = await _task_statuses(run_id)
+    # Force the triggered agent to in_progress so its stage row shows running immediately.
+    if triggered_agent:
+        ts[triggered_agent] = "in_progress"
+
+    metrics = await _run_metrics(run_id)
+    triggers = await _agent_triggers(state.get("project", ""))
+    return templates.TemplateResponse(
+        request,
+        "_run_timeline.html",
+        {
+            "run_id": run_id,
+            "state": state,
+            "task_statuses": ts,
+            "metrics": metrics,
+            "triggers": triggers,
+        },
+    )
+
+
+@router.post("/ui/runs/{run_id}/skip", response_class=HTMLResponse)
+async def run_skip_agent(request: Request, run_id: str) -> HTMLResponse:
+    """Skip a manual-trigger agent and continue the pipeline (decision != 'run' → the gate
+    records a skip note and the graph advances). Lets the human pass on e.g. RFC."""
+    return await _decide(request, run_id, "skip")
+
+
+@router.post("/ui/runs/{run_id}/stop", response_class=HTMLResponse)
+async def run_stop(request: Request, run_id: str) -> HTMLResponse:
+    """Stop a running run: cancel the in-flight agent and mark the run cancelled. The checkpoint
+    is preserved, so it can be resumed or a story re-run from the per-story controls."""
+    await _runner(request).stop_run(run_id)
+    return await _render_timeline(request, run_id)
+
+
+@router.post("/ui/runs/{run_id}/resume-run")
+async def run_resume_stopped(request: Request, run_id: str) -> RedirectResponse:
+    """Resume a stopped (cancelled) run from its last checkpoint (background); redirect so a fresh
+    SSE stream shows live progress."""
+    await _runner(request).resume_stopped(run_id)
+    return RedirectResponse(url=f"/ui/runs/{run_id}", status_code=303)
 
 
 @router.post("/ui/runs/{run_id}/retry")

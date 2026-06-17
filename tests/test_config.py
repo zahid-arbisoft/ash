@@ -23,3 +23,19 @@ def test_runtime_dir_under_repo():
     cfg = load_project("plane")
     assert cfg.runtime_dir.name == "plane"
     assert cfg.runtime_dir.parent.name == "runtime"
+
+
+def test_default_trigger_is_manual_except_pm():
+    # PM runs automatically; every other agent defaults to manual (human gates each step).
+    cfg = ProjectConfig.model_validate({"name": "docpm"})
+    assert cfg.agent_policy("pm").trigger == "auto"
+    for name in ("research", "coding", "reviewer", "fixer", "rfc"):
+        assert cfg.agent_policy(name).trigger == "manual", name
+
+
+def test_explicit_yaml_trigger_overrides_default():
+    cfg = ProjectConfig.model_validate(
+        {"name": "docpm", "agents": {"coding": {"trigger": "auto"}}}
+    )
+    assert cfg.agent_policy("coding").trigger == "auto"  # explicit entry wins
+    assert cfg.agent_policy("research").trigger == "manual"  # still default

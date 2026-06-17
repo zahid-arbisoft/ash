@@ -42,24 +42,81 @@
   <p class="text-sm text-muted mt-2"><span class="text-fg">Testing:</span> {{ spec.technical_spec.testing_strategy }}</p>
 </section>
 
+{# ── Combined effort summary ── #}
+{%- set ns = namespace(est=0.0, llm=0.0, has_est=false, has_llm=false) -%}
+{%- for t in spec.tickets -%}
+  {%- if t.estimate_days is not none and t.estimate_days -%}{% set ns.est = ns.est + t.estimate_days %}{% set ns.has_est = true %}{%- endif -%}
+  {%- if t.llm_estimate_days is not none and t.llm_estimate_days -%}{% set ns.llm = ns.llm + t.llm_estimate_days %}{% set ns.has_llm = true %}{%- endif -%}
+{%- endfor -%}
+{% if ns.has_est or ns.has_llm %}
+<section class="bg-surface border border-border rounded-xl p-4 mb-4 flex items-center gap-6 flex-wrap">
+  <span class="text-xs uppercase tracking-wide text-muted">Combined effort ({{ spec.tickets|length }} ticket{{ "s" if spec.tickets|length != 1 }})</span>
+  {% if ns.has_est %}
+  <span class="text-sm" title="Traditional estimate (without LLM)">
+    <span class="text-muted">Traditional:</span>
+    <span class="font-semibold text-fg ml-1">{{ "%.1f"|format(ns.est) }}d</span>
+    <span class="text-xs text-muted/60 ml-1">({{ "%.0f"|format(ns.est * 8) }}h)</span>
+  </span>
+  {% endif %}
+  {% if ns.has_llm %}
+  <span class="text-sm" title="With LLM pair-programming assistance">
+    <span class="text-muted">With LLM:</span>
+    <span class="font-semibold text-ok ml-1">⚡ {{ "%.1f"|format(ns.llm) }}d</span>
+    <span class="text-xs text-muted/60 ml-1">({{ "%.0f"|format(ns.llm * 8) }}h)</span>
+  </span>
+  {% endif %}
+  {% if ns.has_est and ns.has_llm and ns.llm > 0 %}
+  <span class="text-xs text-muted/60">≈ {{ "%.1f"|format(ns.est / ns.llm) }}× faster with LLM</span>
+  {% endif %}
+</section>
+{% endif %}
+
 <section class="mb-4">
   <h2 class="text-sm font-semibold mb-3">Tickets ({{ spec.tickets|length }})</h2>
-  <div class="grid sm:grid-cols-2 gap-3">
+  <div class="space-y-3">
     {% for t in spec.tickets %}
     <div class="bg-surface border border-border rounded-lg p-4">
       <div class="flex items-center gap-2 mb-1">
         <span class="font-mono text-xs text-accent">{{ t.id }}</span>
         <span class="text-[10px] px-1.5 py-0.5 rounded bg-border text-muted">{{ t.type }}</span>
         {% if t.needs_research %}<span class="text-[10px] px-1.5 py-0.5 rounded bg-warn/15 text-warn">spike</span>{% endif %}
-        {% if t.estimate %}<span class="text-[10px] text-muted ml-auto">{{ t.estimate }}</span>{% endif %}
+        {% if t.estimate or t.llm_estimate %}
+        <span class="ml-auto flex items-center gap-1.5 text-[10px]">
+          {% if t.estimate %}<span class="text-muted" title="Traditional estimate">{{ t.estimate }}</span>{% endif %}
+          {% if t.llm_estimate %}<span class="px-1.5 py-0.5 rounded bg-ok/15 text-ok" title="With LLM assistance">⚡ {{ t.llm_estimate }}</span>{% endif %}
+        </span>
+        {% endif %}
       </div>
       <div class="text-sm font-medium">{{ t.title }}</div>
-      <p class="text-xs text-muted mt-1">{{ t.description }}</p>
-      {% if t.acceptance_criteria %}
-      <ul class="list-disc list-inside text-xs text-muted mt-2 space-y-0.5">
-        {% for a in t.acceptance_criteria %}<li>{{ a }}</li>{% endfor %}
-      </ul>
+      <p class="text-sm text-muted mt-1 whitespace-pre-line">{{ t.description }}</p>
+
+      {% if t.implementation_notes %}
+      <div class="mt-3">
+        <span class="text-xs uppercase tracking-wide text-muted">Implementation notes</span>
+        <p class="text-sm text-muted mt-0.5 whitespace-pre-line">{{ t.implementation_notes }}</p>
+      </div>
       {% endif %}
+      {% if t.affected_files %}
+      <div class="mt-2 text-xs text-muted"><span class="text-fg">Affected files:</span>
+        {% for f in t.affected_files %}<code class="text-accent">{{ f }}</code>{% if not loop.last %}, {% endif %}{% endfor %}
+      </div>
+      {% endif %}
+      {% if t.data_model_changes %}
+      <div class="mt-2 text-xs"><span class="text-fg">Data model:</span>
+        <ul class="list-disc list-inside text-muted mt-0.5">{% for d in t.data_model_changes %}<li>{{ d }}</li>{% endfor %}</ul>
+      </div>
+      {% endif %}
+      {% if t.api_changes %}
+      <div class="mt-2 text-xs"><span class="text-fg">API:</span>
+        <ul class="list-disc list-inside text-muted mt-0.5">{% for a in t.api_changes %}<li>{{ a }}</li>{% endfor %}</ul>
+      </div>
+      {% endif %}
+      {% if t.acceptance_criteria %}
+      <div class="mt-2 text-xs"><span class="text-fg">Acceptance criteria:</span>
+        <ul class="list-disc list-inside text-muted mt-0.5">{% for a in t.acceptance_criteria %}<li>{{ a }}</li>{% endfor %}</ul>
+      </div>
+      {% endif %}
+      {% if t.out_of_scope %}<div class="mt-2 text-xs text-muted"><span class="text-fg">Out of scope:</span> {{ t.out_of_scope }}</div>{% endif %}
       {% if t.dependencies %}<div class="text-[11px] text-muted mt-2">depends on: {{ t.dependencies|join(", ") }}</div>{% endif %}
     </div>
     {% endfor %}

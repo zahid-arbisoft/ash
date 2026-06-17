@@ -7,6 +7,7 @@ replace `asyncio.create_task` with an enqueue call without touching the API or g
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import uuid
 from typing import Any, cast
 
@@ -63,6 +64,22 @@ class Runner:
     def __init__(self, *, graph: Any) -> None:
         self._graph = graph
         self._tasks: set[asyncio.Task[Any]] = set()
+        # Per-run background task, so a run can be stopped (cancelled) by id. Single-process
+        # only — in a multi-worker deploy the task may live on another worker (see stop_run).
+        self._run_tasks: dict[str, asyncio.Task[Any]] = {}
+
+    def _spawn(self, run_id: str, coro: Any) -> None:
+        """Run `coro` in the background, tracked by run_id so `stop_run` can cancel it."""
+        task = asyncio.create_task(coro)
+        self._run_tasks[run_id] = task
+        self._tasks.add(task)
+
+        def _done(t: asyncio.Task[Any]) -> None:
+            self._tasks.discard(t)
+            if self._run_tasks.get(run_id) is t:
+                self._run_tasks.pop(run_id, None)
+
+        task.add_done_callback(_done)
 
     @staticmethod
     def _config(thread_id: str) -> dict[str, Any]:
@@ -103,15 +120,27 @@ class Runner:
         if wait:
             await _invoke()
         else:
-            task = asyncio.create_task(_invoke())
-            self._tasks.add(task)
-            task.add_done_callback(self._tasks.discard)
+            self._spawn(run_id, _invoke())
         return run_id
 
-    async def resume_run(self, run_id: str, decision: Any) -> dict[str, Any] | None:
-        """Resume a run paused at a human-in-the-loop interrupt with the human's decision."""
-        await self._graph.ainvoke(Command(resume=decision), config=self._config(run_id))
-        await self._sync_status(run_id)
+    async def resume_run(
+        self, run_id: str, decision: Any, *, background: bool = False
+    ) -> dict[str, Any] | None:
+        """Resume a run paused at a human-in-the-loop interrupt with the human's decision.
+
+        `background=True` drives the graph in a tracked task and returns immediately (so a
+        triggered agent doesn't block the HTTP request and can be stopped mid-run); the UI
+        catches up over SSE. Default awaits to completion (used by the API + tests)."""
+        config = self._config(run_id)
+
+        async def _do() -> None:
+            await self._graph.ainvoke(Command(resume=decision), config=config)
+            await self._sync_status(run_id)
+
+        if background:
+            self._spawn(run_id, _do())
+        else:
+            await _do()
         return await self.get_run(run_id)
 
     # Run-level steps (not per-story). pm_publish shares the "pm" namespace.
@@ -184,9 +213,14 @@ class Runner:
             from_step if from_step in self._RETRY_AS_NODE else self.first_failed_step(current)
         )
         if run_step and run_step in self._RETRY_AS_NODE:
+            update: dict[str, Any] = {run_step: _fresh_substate(run_step), "status": "running"}
+            # Re-running PM seeds a new spec → clear old stories so the new spec produces a
+            # fresh story set and the UI doesn't show stale completed/failed story cards.
+            if run_step == "pm":
+                update.update({"stories": {}, "story_order": [], "current_story": ""})
             await self._graph.aupdate_state(
                 config,
-                {run_step: _fresh_substate(run_step), "status": "running"},
+                update,
                 as_node=self._RETRY_AS_NODE[run_step],
             )
             return await self._drive(run_id, config, wait)
@@ -229,10 +263,33 @@ class Runner:
         if wait:
             await _resume()
         else:
-            task = asyncio.create_task(_resume())
-            self._tasks.add(task)
-            task.add_done_callback(self._tasks.discard)
+            self._spawn(run_id, _resume())
         return await self.get_run(run_id)
+
+    async def stop_run(self, run_id: str) -> dict[str, Any] | None:
+        """Stop a running run: cancel its in-flight background task and mark it `cancelled`.
+
+        The LangGraph checkpoint is preserved at the last completed node, so the run can be
+        resumed later (`resume_stopped`) or a story re-run from the per-story controls.
+        Single-process only — if the task runs on another worker this just marks the status.
+        """
+        task = self._run_tasks.pop(run_id, None)
+        if task is not None and not task.done():
+            task.cancel()
+            with contextlib.suppress(BaseException):  # await the cancellation to settle
+                await task
+        with contextlib.suppress(Exception):  # mark cancelled in the checkpoint (best-effort)
+            await self._graph.aupdate_state(self._config(run_id), {"status": "cancelled"})
+        await self._sync_status(run_id)
+        return await self.get_run(run_id)
+
+    async def resume_stopped(
+        self, run_id: str, *, wait: bool = False
+    ) -> dict[str, Any] | None:
+        """Resume a previously stopped (cancelled) run from its last checkpoint."""
+        config = self._config(run_id)
+        await self._graph.aupdate_state(config, {"status": "running"})
+        return await self._drive(run_id, config, wait)
 
     async def _sync_status(self, run_id: str) -> None:
         """Copy the final run status onto the RunRecord for the runs-list badge (best-effort)."""
@@ -258,7 +315,15 @@ class Runner:
         #   "spec_review"    → PM spec gate   → Approve / Reject in run timeline
         #   "manual_trigger" → trigger gate   → "Trigger <agent>" button
         #   "merge_approval" → merge gate     → "Approve merge" button
-        if snapshot.interrupts:
+        #
+        # IMPORTANT: suppress the interrupt overlay when a background task is ACTIVELY executing
+        # for this run.  LangGraph only clears snapshot.interrupts once the interrupted node
+        # COMPLETES (i.e. after the LLM call finishes), which can take 5–30 s.  Without this
+        # guard the SSE stream keeps re-surfacing the Trigger/Review button while the agent is
+        # working, making it look like the click had no effect and tempting users to click again.
+        active_task = self._run_tasks.get(run_id)
+        task_is_running = active_task is not None and not active_task.done()
+        if snapshot.interrupts and not task_is_running:
             payload = snapshot.interrupts[0].value
             # Which story (if any) is paused — so the UI surfaces the gate on the right card.
             state["pending_story"] = state.get("current_story", "")
