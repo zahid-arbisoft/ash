@@ -1,0 +1,66 @@
+{# Workbench-runs results table + pagination. Swapped into #wb-results on search/paginate.
+   Rows are dicts: {run: RunRecord, epic_title, ticket_count}. Each row opens the workbench. #}
+{%- set tone = {
+     "awaiting_review": "bg-accent/15 text-accent",
+     "running": "bg-warn/15 text-warn",
+     "completed": "bg-ok/15 text-ok",
+     "failed": "bg-danger/15 text-danger",
+     "cancelled": "bg-border text-muted",
+   } -%}
+{% if rows %}
+<table class="w-full text-sm">
+  <thead>
+    <tr class="text-left text-muted text-xs uppercase tracking-wide">
+      <th class="font-medium px-5 py-2">Run</th>
+      <th class="font-medium px-3 py-2">Spec</th>
+      <th class="font-medium px-3 py-2">Project</th>
+      <th class="font-medium px-3 py-2">Mode</th>
+      <th class="font-medium px-3 py-2">Status</th>
+      <th class="font-medium px-5 py-2 text-right">When</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for row in rows %}
+    {% set r = row.run %}
+    <tr class="border-t border-border/60 hover:bg-elevate/40">
+      <td class="px-5 py-2.5">
+        <a href="/ui/pm/{{ r.run_id }}" class="font-mono text-accent hover:underline">{{ r.run_id[:8] }}</a>
+      </td>
+      <td class="px-3 py-2.5 max-w-md">
+        <a href="/ui/pm/{{ r.run_id }}" class="block truncate hover:underline">{{ row.epic_title or "(generating…)" }}</a>
+        {% if row.ticket_count is not none %}<div class="text-xs text-muted">{{ row.ticket_count }} stor{{ "y" if row.ticket_count == 1 else "ies" }}</div>{% endif %}
+      </td>
+      <td class="px-3 py-2.5 text-muted">{{ r.project }} · {{ r.item_id }}</td>
+      <td class="px-3 py-2.5 text-muted">{{ r.story_mode }}</td>
+      <td class="px-3 py-2.5">
+        <span class="text-[11px] px-1.5 py-0.5 rounded {{ tone.get(r.status, 'bg-border text-muted') }}">{{ r.status.replace("_", " ") }}</span>
+      </td>
+      <td class="px-5 py-2.5 text-right text-muted whitespace-nowrap">{{ r.created_at.strftime("%b %d, %H:%M") }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+{% if pages > 1 %}
+<div class="flex items-center justify-between px-5 py-3 border-t border-border text-sm">
+  <span class="text-muted">{{ total }} run(s)</span>
+  <div class="flex gap-1">
+    {% for p in range(1, pages + 1) %}
+      {% if p == page %}
+        <span class="px-2.5 py-1 rounded bg-accent text-bg font-medium">{{ p }}</span>
+      {% else %}
+        <a hx-get="/ui/pm-workbench?page={{ p }}&q={{ q }}&project={{ filter_project }}"
+           hx-target="#wb-results" hx-swap="innerHTML"
+           href="/ui/pm-workbench?page={{ p }}&q={{ q }}&project={{ filter_project }}"
+           class="px-2.5 py-1 rounded text-muted hover:text-fg hover:bg-elevate">{{ p }}</a>
+      {% endif %}
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+
+{% else %}
+<div class="px-5 py-12 text-center text-muted text-sm">
+  {% if q or filter_project %}No workbench runs match your search.{% else %}No PM workbench runs yet. <a href="/ui/pm/new" class="text-accent hover:underline">Start one →</a>{% endif %}
+</div>
+{% endif %}

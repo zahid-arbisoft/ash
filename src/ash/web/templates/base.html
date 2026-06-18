@@ -152,7 +152,7 @@
         {{ navlink("/", "Dashboard", "▦", path == "/") }}
         {{ navlink("/ui/work", "Work board", "▤", path.startswith("/ui/work")) }}
         {{ navlink("/ui/runs", "Runs", "↻", path.startswith("/ui/runs") and path != "/ui/runs/new") }}
-        {{ navlink("/ui/pm-runs", "PM runs", "✦", path.startswith("/ui/pm-runs")) }}
+        {{ navlink("/ui/pm-workbench", "PM workbench", "✦", path.startswith("/ui/pm")) }}
         {{ navlink("/ui/agents", "Agents", "◇", path.startswith("/ui/agents")) }}
         {{ navlink("/ui/connectors", "Connectors", "⇄", path.startswith("/ui/connectors")) }}
         {{ navlink("/ui/approvals", "Approvals", "✓", path.startswith("/ui/approvals")) }}
@@ -179,7 +179,7 @@
             <a href="/" class="block px-4 py-2 text-muted hover:text-fg hover:bg-elevate">Dashboard</a>
             <a href="/ui/work" class="block px-4 py-2 text-muted hover:text-fg hover:bg-elevate">Work board</a>
             <a href="/ui/runs" class="block px-4 py-2 text-muted hover:text-fg hover:bg-elevate">Runs</a>
-            <a href="/ui/pm-runs" class="block px-4 py-2 text-muted hover:text-fg hover:bg-elevate">PM runs</a>
+            <a href="/ui/pm-workbench" class="block px-4 py-2 text-muted hover:text-fg hover:bg-elevate">PM workbench</a>
             <a href="/ui/agents" class="block px-4 py-2 text-muted hover:text-fg hover:bg-elevate">Agents</a>
             <a href="/ui/connectors" class="block px-4 py-2 text-muted hover:text-fg hover:bg-elevate">Connectors</a>
             <a href="/ui/approvals" class="block px-4 py-2 text-muted hover:text-fg hover:bg-elevate">Approvals</a>
@@ -226,6 +226,7 @@
           <div x-show="open" x-cloak @click.outside="open=false"
                class="absolute right-0 z-20 mt-2 w-44 bg-surface border border-border rounded-lg shadow-xl py-1 text-sm">
             <a href="/ui/runs/new" class="block px-4 py-2 text-fg hover:bg-elevate">New run</a>
+            <a href="/ui/pm/new" class="block px-4 py-2 text-fg hover:bg-elevate">New PM run</a>
             <a href="/admin/connector/create" class="block px-4 py-2 text-fg hover:bg-elevate">New connector</a>
           </div>
         </div>

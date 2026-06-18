@@ -188,6 +188,8 @@ def make_node(
             await _update_task_best_effort(state, task_agent, "in_progress", ticket_id=ticket_id)
 
         # ── run the agent ──────────────────────────────────────────────────────
+        # Reset the LLM-I/O capture buffer so we only persist this run's exchanges (decision #30).
+        getattr(agent, "reset_exchanges", lambda: None)()
         started = time.monotonic()
         try:
             result = await agent.run(state)
@@ -200,14 +202,16 @@ def make_node(
                     state, task_agent, "failed", error=err, ticket_id=ticket_id
                 )
             await _record_metric(state, agent.name, ticket_id, started, {"error": err}, "failed")
+            await _record_exchanges(state, agent, ticket_id)
             if scoped:
                 return _fold_story(state, agent.name, {agent.name: {"error": err}})
             return {agent.name: {"error": err}}
 
-        # ── analytics: tokens + duration (best-effort) ────────────────────────
+        # ── analytics: tokens + duration + LLM I/O (best-effort) ───────────────
         ns_result = result.get(agent.name, {}) if isinstance(result, dict) else {}
         status = "failed" if isinstance(ns_result, dict) and ns_result.get("error") else "completed"
         await _record_metric(state, agent.name, ticket_id, started, ns_result, status)
+        await _record_exchanges(state, agent, ticket_id)
 
         # ── post-run: update task + create next ───────────────────────────────
         if task_agent:
@@ -259,6 +263,29 @@ async def _record_metric(
             await session.commit()
     except Exception as exc:  # noqa: BLE001 — analytics are best-effort, never block a run
         logger.debug("[nodes] metric record best-effort failed agent=%s: %s", agent_name, exc)
+
+
+async def _record_exchanges(state: WorkflowState, agent: Agent, ticket_id: str) -> None:
+    """Persist the agent's captured LLM exchanges (prompt + response); best-effort (#30)."""
+    exchanges = list(getattr(agent, "_exchanges", []) or [])
+    if not exchanges:
+        return
+    try:
+        from ash.db.base import get_sessionmaker
+        from ash.db.exchanges import record_exchanges
+
+        async with get_sessionmaker()() as session:
+            await record_exchanges(
+                session,
+                run_id=state.run_id,
+                project=state.project,
+                ticket_id=ticket_id or None,
+                agent_name=agent.name,
+                exchanges=exchanges,
+            )
+            await session.commit()
+    except Exception as exc:  # noqa: BLE001 — capture is best-effort, never block a run
+        logger.debug("[nodes] exchange record best-effort failed agent=%s: %s", agent.name, exc)
 
 
 async def _handle_post_run(

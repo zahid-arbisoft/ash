@@ -1,9 +1,10 @@
 {% extends "base.html" %}
-{% block title %}New run{% endblock %}
-{% block breadcrumb %}<a href="/ui/runs" class="hover:text-fg">Runs</a> / New{% endblock %}
+{% block title %}{% if pm_mode %}New PM run{% else %}New run{% endif %}{% endblock %}
+{% block breadcrumb %}{% if pm_mode %}<a href="/ui/pm-workbench" class="hover:text-fg">PM workbench</a> / New{% else %}<a href="/ui/runs" class="hover:text-fg">Runs</a> / New{% endif %}{% endblock %}
 {% block body %}
 
-<h1 class="text-xl font-semibold mb-5">Start a run</h1>
+<h1 class="text-xl font-semibold mb-1">{% if pm_mode %}Start a PM run{% else %}Start a run{% endif %}</h1>
+{% if pm_mode %}<p class="text-sm text-muted mb-5">PM generates a spec and stops at the workbench — review, iterate on stories, then optionally build.</p>{% endif %}
 
 {% if not sources %}
 <div class="border border-ok/30 bg-ok/5 rounded-xl p-4 mb-4 text-sm leading-relaxed">
@@ -26,6 +27,7 @@
       x-data="{ source:'', item:'' }"
       class="bg-surface border border-border rounded-xl p-5 max-w-2xl space-y-4">
 
+  {% if pm_mode %}<input type="hidden" name="pm_only" value="true">{% endif %}
   {% macro field_label(text) %}<label class="block text-sm text-muted mb-1">{{ text }}</label>{% endmacro %}
   {% set field = "w-full bg-bg border border-border rounded-lg px-3 h-10 text-sm outline-none focus:border-accent" %}
 
@@ -104,7 +106,7 @@
   <div class="pt-2">
     <button type="submit"
             class="bg-accent text-bg font-semibold text-sm rounded-lg px-5 h-10 hover:brightness-110">
-      Start run
+      {% if pm_mode %}Start PM run{% else %}Start run{% endif %}
     </button>
   </div>
 </form>

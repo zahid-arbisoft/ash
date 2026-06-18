@@ -211,6 +211,31 @@ async def test_generate_falls_back_on_groq_tool_choice_error():
     assert out.answer == "recovered"
 
 
+async def test_generate_captures_exchanges_two_phase():
+    """The explore + extract calls are captured into _exchanges with the right phases."""
+    fake = _ToolThenAnswerFake("_peek", _Result(answer="done"))
+    agent = _Agent(Settings(), model=fake)
+    agent.reset_exchanges()
+
+    await agent.generate(_Result, system="sys", user="explore", tools=[_peek])
+
+    phases = [e["phase"] for e in agent._exchanges]
+    assert "explore" in phases  # the tool loop step(s)
+    assert phases[-1] == "extract"  # the structured extraction
+    extract = agent._exchanges[-1]
+    assert extract["response"]["parsed"] == {"answer": "done"}
+    assert any(m["role"] in ("system", "user") for m in extract["request"])
+
+
+async def test_capture_disabled_by_setting():
+    """persist_llm_exchanges=False → nothing is captured."""
+    fake = _TwoPhaseFake("explored", _Result(answer="42"))
+    agent = _Agent(Settings(persist_llm_exchanges=False), model=fake)
+    agent.reset_exchanges()
+    await agent.generate(_Result, system="sys", user="do it", tools=[_peek])
+    assert agent._exchanges == []
+
+
 async def test_extract_strips_tool_instructions():
     """_extract should remove tool-usage hints from the user prompt."""
 

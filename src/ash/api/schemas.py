@@ -17,6 +17,7 @@ class RunRequest(BaseModel):
     task_sink_id: int | None = None  # where PM pushes tickets (None → default → file board)
     ticket_id: str = ""  # scope the build to one spec ticket (legacy single-ticket runs)
     story_mode: str = "single"  # PM produces one story (default) or many (decision #26)
+    pm_only: bool = False  # PM workbench run — generate/refine spec and stop (decision #29)
 
 
 class RunAccepted(BaseModel):

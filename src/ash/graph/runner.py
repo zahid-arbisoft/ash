@@ -24,6 +24,7 @@ from ash.graph.state import (
     StoryState,
     WorkflowState,
 )
+from ash.schemas import Spec
 
 # Per-story build steps, in execution order (decision #26).
 _STORY_STEPS: tuple[str, ...] = ("research", "coding", "reviewer", "fixer")
@@ -61,8 +62,11 @@ def _reset_story_from(story_dict: dict[str, Any], step: str) -> StoryState:
 
 
 class Runner:
-    def __init__(self, *, graph: Any) -> None:
+    def __init__(self, *, graph: Any, pm_agent: Any = None) -> None:
         self._graph = graph
+        # PMAgent instance used by the workbench per-story refine (decision #29). Optional so
+        # tests that build a bare graph keep working; refine_ticket no-ops when it's absent.
+        self._pm_agent = pm_agent
         self._tasks: set[asyncio.Task[Any]] = set()
         # Per-run background task, so a run can be stopped (cancelled) by id. Single-process
         # only — in a multi-worker deploy the task may live on another worker (see stop_run).
@@ -97,6 +101,7 @@ class Runner:
         task_sink_id: int | None = None,
         ticket_id: str = "",
         story_mode: str = "single",
+        pm_only: bool = False,
         wait: bool = False,
     ) -> str:
         run_id = uuid.uuid4().hex
@@ -111,6 +116,7 @@ class Runner:
             task_sink_id=task_sink_id,
             ticket_id=ticket_id,
             story_mode=story_mode,  # type: ignore[arg-type]
+            pm_only=pm_only,
         )
 
         async def _invoke() -> None:
@@ -253,6 +259,99 @@ class Runner:
         )
         return await self._drive(run_id, config, wait)
 
+    async def regenerate_spec(
+        self,
+        run_id: str,
+        *,
+        feedback: str,
+        story_mode: str | None = None,
+        wait: bool = False,
+    ) -> dict[str, Any] | None:
+        """PM workbench (decision #29): re-run PM with the reviewer's spec-level feedback.
+
+        Seeds a fresh PMState carrying the feedback (consumed once by PMAgent.run) and an
+        incremented iteration counter, clears any prior story planning, then forks the graph
+        ``as_node="intake"`` so `pm → pm_publish` runs again and re-interrupts at the review gate.
+        Cannot reuse ``retry_run(from_step="pm")`` — its ``_fresh_substate("pm")`` would wipe the
+        feedback before PM reads it. ``pm_only``/``intake_mode`` live on WorkflowState so they
+        survive the update; an optional ``story_mode`` lets the workbench toggle apply on regen.
+        """
+        current = await self.get_run(run_id)
+        if current is None:
+            return None
+        config = self._config(run_id)
+        prior = int((current.get("pm") or {}).get("regeneration_count", 0) or 0)
+        update: dict[str, Any] = {
+            "pm": PMState(feedback=feedback, regeneration_count=prior + 1),
+            "stories": {},
+            "story_order": [],
+            "current_story": "",
+            "status": "running",
+        }
+        if story_mode in ("single", "multiple"):
+            update["story_mode"] = story_mode
+        await self._graph.aupdate_state(config, update, as_node="intake")
+        return await self._drive(run_id, config, wait)
+
+    async def refine_ticket(
+        self, run_id: str, *, ticket_id: str, feedback: str
+    ) -> dict[str, Any] | None:
+        """PM workbench (decision #29): refine ONE ticket of the current spec in place.
+
+        Runs a single-ticket elaborate (reusing PMAgent) with the reviewer's feedback and folds the
+        updated ticket back into ``pm.spec`` via ``aupdate_state`` WITHOUT advancing the graph — the
+        run stays paused at the ``spec_review`` interrupt so the user can still Approve afterward.
+        """
+        current = await self.get_run(run_id)
+        if current is None:
+            return None
+        if self._pm_agent is None:
+            return current
+        pm_dict = current.get("pm") or {}
+        spec_dict = pm_dict.get("spec")
+        if not spec_dict:
+            return current
+        spec = Spec.model_validate(spec_dict)
+        getattr(self._pm_agent, "reset_exchanges", lambda: None)()
+        refined = await self._pm_agent.refine_ticket(spec, ticket_id, feedback)
+        if refined is None:
+            return current
+        spec.tickets = [refined if t.id == ticket_id else t for t in spec.tickets]
+        pm_state = PMState.model_validate(pm_dict)
+        pm_state.spec = spec
+        pm_state.ticket_feedback = {**pm_state.ticket_feedback, ticket_id: feedback}
+        # No as_node → patch the pm channel in place; the pending spec_review interrupt is kept.
+        await self._graph.aupdate_state(self._config(run_id), {"pm": pm_state})
+        # This PM call ran outside the node wrapper — persist its LLM I/O here (decision #30).
+        await self._record_refine_exchanges(run_id, current.get("project", ""), ticket_id)
+        return await self.get_run(run_id)
+
+    async def _record_refine_exchanges(
+        self, run_id: str, project: str, ticket_id: str
+    ) -> None:
+        """Persist LLM exchanges captured during a workbench refine (best-effort)."""
+        exchanges = list(getattr(self._pm_agent, "_exchanges", []) or [])
+        if not exchanges:
+            return
+        for ex in exchanges:
+            ex["phase"] = "refine"
+        try:
+            from ash.db.base import get_sessionmaker
+            from ash.db.exchanges import record_exchanges
+
+            async with get_sessionmaker()() as session:
+                await record_exchanges(
+                    session,
+                    run_id=run_id,
+                    project=project,
+                    ticket_id=ticket_id or None,
+                    agent_name="pm",
+                    exchanges=exchanges,
+                )
+                await session.commit()
+        except Exception:  # noqa: BLE001 — best-effort
+            pass
+
     async def _drive(
         self, run_id: str, config: dict[str, Any], wait: bool
     ) -> dict[str, Any] | None:
@@ -342,4 +441,11 @@ class Runner:
                 # Fallback: treat any unknown interrupt as a generic review gate.
                 state["status"] = "awaiting_review"
                 state["pending_review"] = True
+        elif not task_is_running and "pm_publish" in (getattr(snapshot, "next", None) or ()):
+            # The spec gate is still pending but the interrupt payload was dropped by an in-place
+            # state patch (the workbench per-story refine calls aupdate_state without advancing the
+            # graph). pm_publish is always the spec_review gate, so re-surface it for the UI.
+            state["status"] = "awaiting_review"
+            state["pending_review"] = True
+            state["pending_story"] = state.get("current_story", "")
         return state

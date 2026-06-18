@@ -170,6 +170,22 @@ await self._graph.aupdate_state(
 `ainvoke`. For story retries, `as_node="plan_stories"` so `story_router` picks up the reset
 story and routes into `story_build` again.
 
+**PM workbench variants (decision #29):**
+- `Runner.regenerate_spec` seeds a fresh `PMState(feedback=…, regeneration_count=n+1)` and forks
+  `as_node="intake"`, then `_drive` re-runs `pm → pm_publish` so the spec is regenerated from the
+  reviewer's feedback and re-interrupts at the gate. (It can't reuse `retry_run(from_step="pm")`,
+  whose `_fresh_substate("pm")` would wipe the feedback before PM reads it.)
+- `Runner.refine_ticket` patches `pm.spec` in place with `aupdate_state(config, {"pm": …})` **and no
+  `as_node`** — it does NOT advance the graph, so the run stays paused at the `spec_review` interrupt.
+  One caveat: a plain `update_state` while interrupted drops `snapshot.interrupts`, so `get_run`
+  falls back to `snapshot.next` (the `pm_publish` node still being "next") to keep the gate visible.
+
+**Conditional routing for standalone PM** (`graph/builder.py`): the `pm_publish → rfc` and
+`rfc → plan_stories` edges are conditional (`_route_after_pm_publish` / `_route_after_rfc`). Full
+runs (`pm_only=False`) always return their original targets; a `pm_only` run routes to `merge`
+(END) by default, or to a one-shot `rfc` / `plan_stories` when `PMState.next_action` is set from the
+gate decision. This is the seam the planned "every agent in its own space" work will extend.
+
 ---
 
 ## 2. LangChain Core — Agent Contracts and Primitives

@@ -8,7 +8,10 @@
     <h1 class="text-xl font-semibold">Run <span class="font-mono text-base text-muted">{{ run_id[:12] }}</span></h1>
     <p class="text-sm text-muted mt-0.5">Live status — updates automatically.</p>
   </div>
-  <a href="/ui/runs" class="text-sm text-accent hover:underline">← All runs</a>
+  <div class="flex items-center gap-4">
+    <a href="/ui/runs/{{ run_id }}/llm" class="text-sm text-accent hover:underline">LLM I/O →</a>
+    <a href="/ui/runs" class="text-sm text-muted hover:text-fg hover:underline">← All runs</a>
+  </div>
 </div>
 
 {# Preserve <details> open/closed state across SSE swaps — htmx replaces innerHTML which resets

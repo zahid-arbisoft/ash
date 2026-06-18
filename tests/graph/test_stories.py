@@ -57,6 +57,30 @@ def test_selection_in_multiple_mode():
     assert set(stories) == {"T2", "T3"}
 
 
+def test_single_mode_ignores_stale_prior_stories():
+    # decision #29: a stale `stories` dict from an earlier multi-story run must not leak extra
+    # stories into single mode — exactly one story comes out.
+    state = _state(story_mode="single")
+    state.pm.spec = _spec([_ticket("T1"), _ticket("T2"), _ticket("T3")])
+    state.stories = {
+        "T1": StoryState(ticket_id="T1", status="completed"),
+        "T2": StoryState(ticket_id="T2", status="completed"),
+        "T3": StoryState(ticket_id="T3", status="completed"),
+    }
+    stories, order = build_stories(state)
+    assert list(stories) == ["T1"]
+    assert order == ["T1"]
+
+
+def test_pm_only_build_forces_single_story():
+    # decision #29: the workbench "build first story" action forces one story even in multiple mode.
+    state = _state(story_mode="multiple", pm_only=True)
+    state.pm.spec = _spec([_ticket("T1"), _ticket("T2"), _ticket("T3")])
+    state.pm.next_action = "build"
+    stories, _ = build_stories(state)
+    assert list(stories) == ["T1"]
+
+
 def test_no_spec_yields_one_synthetic_story():
     state = _state(issue_title="raw thing")
     stories, order = build_stories(state)

@@ -214,6 +214,27 @@ def _route_after_intake(state: WorkflowState) -> str:
     return "plan_stories" if state.intake_mode == "raw_to_dev" else "pm"
 
 
+def _route_after_pm_publish(state: WorkflowState) -> str:
+    """PM workbench routing (decision #29). Full pipeline runs (pm_only=False) always continue to
+    RFC — unchanged behavior. A pm_only run STOPS after the spec unless the reviewer picked a
+    manual follow-up at the gate: 'rfc' → generate an RFC, 'build' → build the first story."""
+    if not state.pm_only:
+        return "rfc"
+    if state.pm.next_action == "rfc":
+        return "rfc"
+    if state.pm.next_action == "build":
+        return "plan_stories"
+    return "merge"
+
+
+def _route_after_rfc(state: WorkflowState) -> str:
+    """RFC is a terminal action in the workbench ('generate an RFC and stop'); full runs always
+    continue to story planning."""
+    if state.pm_only and state.pm.next_action == "rfc":
+        return "merge"
+    return "plan_stories"
+
+
 def _build_story_subgraph(agents: dict[str, Agent]) -> Any:
     """The per-story build pipeline as a compiled subgraph over WorkflowState (no own
     checkpointer — the parent graph persists state and bubbles interrupts)."""
@@ -250,8 +271,16 @@ def build_graph(agents: dict[str, Agent], *, checkpointer: Any) -> Any:
         {"pm": "pm", "plan_stories": "plan_stories", "merge": "merge"},
     )
     graph.add_edge("pm", "pm_publish")
-    graph.add_edge("pm_publish", "rfc")
-    graph.add_edge("rfc", "plan_stories")
+    graph.add_conditional_edges(
+        "pm_publish",
+        _route_after_pm_publish,
+        {"rfc": "rfc", "plan_stories": "plan_stories", "merge": "merge"},
+    )
+    graph.add_conditional_edges(
+        "rfc",
+        _route_after_rfc,
+        {"plan_stories": "plan_stories", "merge": "merge"},
+    )
     graph.add_edge("plan_stories", "story_router")
     graph.add_conditional_edges(
         "story_router",

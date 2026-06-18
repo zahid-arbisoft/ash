@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+{% block title %}LLM I/O {{ run_id[:8] }}{% endblock %}
+{% block breadcrumb %}<a href="/ui/runs" class="hover:text-fg">Runs</a> / <a href="/ui/runs/{{ run_id }}" class="hover:text-fg">{{ run_id[:8] }}</a> / LLM I/O{% endblock %}
+{% block body %}
+
+{%- set phase_tone = {
+     "single_call": "bg-accent/15 text-accent",
+     "extract": "bg-ok/15 text-ok",
+     "explore": "bg-warn/15 text-warn",
+     "refine": "bg-accent/15 text-accent",
+   } -%}
+
+<div class="flex items-center justify-between mb-5">
+  <div>
+    <h1 class="text-xl font-semibold">LLM I/O
+      <span class="font-mono text-base text-muted">{{ run_id[:12] }}</span></h1>
+    <p class="text-sm text-muted mt-0.5">{{ total }} exchange{{ "" if total == 1 else "s" }} — what each agent sent to and received from the model.</p>
+  </div>
+  <a href="/ui/runs/{{ run_id }}" class="text-sm text-accent hover:underline">← Run</a>
+</div>
+
+{% if not groups %}
+<div class="bg-surface border border-border rounded-xl px-5 py-12 text-center text-muted">
+  No LLM exchanges recorded for this run.
+  <span class="block text-xs mt-1">Capture is on by default; set <code>PERSIST_LLM_EXCHANGES=false</code> to disable it.</span>
+</div>
+{% endif %}
+
+{% for g in groups %}
+<section class="mb-5">
+  <h2 class="text-sm font-semibold mb-2">
+    <span class="font-mono text-accent">{{ g.agent_name }}</span>
+    {% if g.ticket_id %}<span class="text-muted">· story {{ g.ticket_id }}</span>{% endif %}
+    <span class="text-muted/60 font-normal">· {{ g.exchanges|length }} call{{ "" if g.exchanges|length == 1 else "s" }}</span>
+  </h2>
+
+  <div class="space-y-2">
+    {% for ex in g.exchanges %}
+    <details class="bg-surface border border-border rounded-lg overflow-hidden" data-key="{{ run_id }}-{{ ex.id }}">
+      <summary class="flex items-center gap-2 px-4 py-2.5 cursor-pointer text-sm hover:bg-elevate/40">
+        <span class="text-[10px] px-1.5 py-0.5 rounded {{ phase_tone.get(ex.phase, 'bg-border text-muted') }}">{{ ex.phase }}{% if ex.step %} ·{{ ex.step }}{% endif %}</span>
+        <span class="text-muted text-xs font-mono">{{ ex.model or "—" }}</span>
+        <span class="ml-auto text-[11px] text-muted">
+          {{ ex.prompt_tokens }}→{{ ex.completion_tokens }} tok
+          <span class="text-muted/50">· {{ ex.created_at.strftime("%H:%M:%S") }}</span>
+        </span>
+      </summary>
+
+      <div class="border-t border-border px-4 py-3 space-y-3">
+        {# ── request: the messages sent ── #}
+        <div>
+          <div class="text-xs uppercase tracking-wide text-muted mb-1">Sent ({{ ex.request|length }} message{{ "" if ex.request|length == 1 else "s" }})</div>
+          <div class="space-y-2">
+            {% for m in ex.request %}
+            <div>
+              <span class="text-[10px] px-1.5 py-0.5 rounded bg-elevate text-muted uppercase">{{ m.role }}</span>
+              <pre class="mt-1 text-xs whitespace-pre-wrap break-words bg-elevate/40 rounded p-2 max-h-72 overflow-auto">{{ m.content }}</pre>
+            </div>
+            {% endfor %}
+          </div>
+        </div>
+
+        {# ── response: what came back ── #}
+        <div>
+          <div class="text-xs uppercase tracking-wide text-muted mb-1">Received</div>
+          {% if ex.response.get("content") %}
+          <pre class="text-xs whitespace-pre-wrap break-words bg-ok/5 border border-ok/20 rounded p-2 max-h-72 overflow-auto">{{ ex.response.get("content") }}</pre>
+          {% endif %}
+          {% if ex.response.get("tool_calls") %}
+          <div class="text-xs mt-1"><span class="text-fg">Tool calls:</span>
+            <pre class="text-xs whitespace-pre-wrap break-words bg-elevate/40 rounded p-2 mt-1 max-h-60 overflow-auto">{{ ex.response.get("tool_calls") | tojson(indent=2) }}</pre>
+          </div>
+          {% endif %}
+          {% if ex.response.get("parsed") is not none %}
+          <div class="text-xs mt-1"><span class="text-fg">Structured output:</span>
+            <pre class="text-xs whitespace-pre-wrap break-words bg-elevate/40 rounded p-2 mt-1 max-h-72 overflow-auto">{{ ex.response.get("parsed") | tojson(indent=2) }}</pre>
+          </div>
+          {% endif %}
+        </div>
+      </div>
+    </details>
+    {% endfor %}
+  </div>
+</section>
+{% endfor %}
+
+{% endblock %}

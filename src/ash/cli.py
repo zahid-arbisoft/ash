@@ -1,8 +1,9 @@
 """Thin CLI for local runs without the API.
 
 `ash list --project plane` lists issues; `ash run --project plane --issue 42` runs the full graph
-once with an in-memory checkpointer (no Postgres needed) and prints the final state. The FastAPI
-app (`ash.api.app:app`) is the production entrypoint.
+once, persisting run state to the **Postgres checkpointer** (same store as the API) and printing the
+final state. Pass `--ephemeral` for an in-memory checkpointer (no Postgres; state lost on exit).
+The FastAPI app (`ash.api.app:app`) is the production entrypoint.
 """
 
 from __future__ import annotations
@@ -14,7 +15,6 @@ import json
 import sys
 
 import httpx
-from langgraph.checkpoint.memory import MemorySaver
 
 from ash.app_context import build_runner
 from ash.clients.github import GitHubClient
@@ -38,12 +38,27 @@ async def _list(project_name: str, limit: int) -> int:
     return 0
 
 
-async def _run(project_name: str, issue: int) -> int:
+async def _run(project_name: str, issue: int, ephemeral: bool = False) -> int:
     settings = get_settings()
-    runner = build_runner(settings, checkpointer=MemorySaver())
-    run_id = await runner.start_run(project=project_name, item_id=str(issue), wait=True)
-    state = await runner.get_run(run_id)
-    print(json.dumps(state, default=str, indent=2))
+    if ephemeral:
+        from langgraph.checkpoint.memory import MemorySaver
+
+        runner = build_runner(settings, checkpointer=MemorySaver())
+        run_id = await runner.start_run(project=project_name, item_id=str(issue), wait=True)
+        print(json.dumps(await runner.get_run(run_id), default=str, indent=2))
+        return 0
+
+    # Default: persist to Postgres exactly like the API lifespan (init tables, open the saver for
+    # the run's lifetime, build the runner inside the context).
+    from ash.db.base import init_db
+    from ash.graph.checkpointer import checkpointer_from_dsn
+
+    await init_db()
+    async with checkpointer_from_dsn(settings.postgres_dsn) as saver:
+        await saver.setup()  # idempotent — creates the LangGraph checkpoint tables
+        runner = build_runner(settings, checkpointer=saver)
+        run_id = await runner.start_run(project=project_name, item_id=str(issue), wait=True)
+        print(json.dumps(await runner.get_run(run_id), default=str, indent=2))
     return 0
 
 
@@ -66,9 +81,14 @@ def main(argv: list[str] | None = None) -> int:
     p_list.add_argument("--project", required=True)
     p_list.add_argument("--limit", type=int, default=20)
 
-    p_run = sub.add_parser("run", help="run the full graph once for one issue (in-memory)")
+    p_run = sub.add_parser("run", help="run the graph once for an issue (persists to Postgres)")
     p_run.add_argument("--project", required=True)
     p_run.add_argument("--issue", type=int, required=True)
+    p_run.add_argument(
+        "--ephemeral",
+        action="store_true",
+        help="use an in-memory checkpointer (no Postgres; run state is lost on exit)",
+    )
 
     p_admin = sub.add_parser("create-admin", help="create (or reset) an admin-portal user")
     p_admin.add_argument("--username", required=True)
@@ -78,7 +98,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "list":
         return asyncio.run(_list(args.project, args.limit))
     if args.command == "run":
-        return asyncio.run(_run(args.project, args.issue))
+        return asyncio.run(_run(args.project, args.issue, args.ephemeral))
     if args.command == "create-admin":
         password = args.password or getpass.getpass("Password: ")
         if not password:

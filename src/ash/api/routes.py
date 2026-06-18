@@ -45,6 +45,7 @@ async def start_run(req: RunRequest, request: Request) -> RunAccepted:
         task_sink_id=req.task_sink_id,
         ticket_id=req.ticket_id,
         story_mode=req.story_mode,
+        pm_only=req.pm_only,
     )
     return RunAccepted(run_id=run_id)
 

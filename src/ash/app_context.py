@@ -43,5 +43,7 @@ def build_agents(
 
 
 def build_runner(settings: Settings, *, checkpointer: Any) -> Runner:
-    graph = build_graph(build_agents(settings), checkpointer=checkpointer)
-    return Runner(graph=graph)
+    agents = build_agents(settings)
+    graph = build_graph(agents, checkpointer=checkpointer)
+    # Pass the PMAgent so the Runner can drive the workbench per-story refine (decision #29).
+    return Runner(graph=graph, pm_agent=agents["pm"])

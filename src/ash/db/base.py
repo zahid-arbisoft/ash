@@ -68,6 +68,7 @@ _PG_COLUMN_BACKFILLS: tuple[str, ...] = (
     "NOT NULL DEFAULT ''",
     "ALTER TABLE run_records ADD COLUMN IF NOT EXISTS story_mode VARCHAR(20) "
     "NOT NULL DEFAULT 'single'",
+    "ALTER TABLE run_records ADD COLUMN IF NOT EXISTS pm_only BOOLEAN NOT NULL DEFAULT FALSE",
     # decision #26: per-story task scoping (agent_tasks predates the ticket_id column).
     "ALTER TABLE agent_tasks ADD COLUMN IF NOT EXISTS ticket_id VARCHAR(120) "
     "NOT NULL DEFAULT ''",

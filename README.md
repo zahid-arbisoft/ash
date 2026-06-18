@@ -37,6 +37,7 @@ integration ─► intake ─► (intake_mode?)
 - **All six agents are real**, sharing the same `BaseAgent` contract and LangChain tool loop:
   - **PM** — raw requirements → epic + technical spec + implementation tickets (with traditional and
     LLM-assisted effort estimates); spec review gate before tickets are pushed to Jira/Plane/file board.
+    Also runs **standalone in the PM workbench** (below).
   - **RFC** — optional pre-build design document (opt-in via `trigger: auto` in project config).
   - **Research** — code-intel spike; produces a grounded implementation plan per story.
   - **Coding** — reads the plan, writes/edits files in a git worktree, commits and opens a PR.
@@ -49,10 +50,17 @@ integration ─► intake ─► (intake_mode?)
 - **Story mode** — `single` (default): PM produces one story, one PR; `multiple`: PM decomposes the
   work, each story gets its own PR. Selectable at run-start; the review gate lets you uncheck stories
   in multiple mode.
+- **PM workbench** (`/ui/pm`) — run PM **standalone** to generate a spec and stop (no auto-build),
+  then iterate on story quality with a two-level feedback loop: a spec-level box regenerates the whole
+  spec from your notes, and each story card has an inline **Refine** that re-elaborates just that
+  ticket. When you're happy, one-click **Generate RFC** or **Build first story** kicks off that work
+  (manual, never automatic). New PM run: `+ New` → *New PM run*, or `/ui/pm/new`.
 - **Effort estimates** — each ticket carries a *traditional* estimate (without AI tooling) and an
-  *LLM-assisted* estimate (typically 5–8× faster). Both are shown per-story and totalled across the PM
-  run. See [docs/plan/ash_architecture_and_plan.md §Estimates](docs/plan/ash_architecture_and_plan.md)
-  for the calculation methodology.
+  *LLM-assisted* estimate (typically 5–8× faster). The LLM proposes them and a deterministic Python
+  repair pass normalizes the numbers (parses the text estimate → days; derives the LLM-assisted days
+  via a configurable speedup factor when the model's are missing/inconsistent) — so estimates stay
+  sane even on small-context models. Both are shown per-story and totalled. See
+  [docs/plan/ash_architecture_and_plan.md §7 decision #29](docs/plan/ash_architecture_and_plan.md).
 - **Specs go to the Board; code goes to the PR** (kept strictly separate).
 - **Human-in-the-loop is a toggle** — `trigger: manual` pauses before any agent; `ApprovalGate`
   gates spec review and optional merge; each ticket runs in its own **git worktree**.
@@ -63,6 +71,11 @@ integration ─► intake ─► (intake_mode?)
 
 - **Jinja2 UI at `/`** — dashboard, paginated runs list (`/ui/runs`), start-run form (pick
   integration + intake mode), live run status with pretty spec view and approve/reject gate.
+- **PM workbench (`/ui/pm-workbench`)** — a direct list of standalone PM runs (rows open the
+  workbench); the searchable spec archive lives at `/ui/pm-runs` ("All specs →").
+- **LLM I/O (`/ui/runs/{id}/llm`)** — every agent↔LLM exchange (the exact prompt sent + response
+  received) is persisted and shown per run, grouped by story/agent with token + model badges. Set
+  `PERSIST_LLM_EXCHANGES=false` to disable capture.
 - **Admin portal at `/admin`** (SQLAdmin) — CRUD for integrations (tokens encrypted via Fernet) and
   the run registry. Login uses DB-backed admin users (PBKDF2-hashed), with the `ADMIN_USER` /
   `ADMIN_PASSWORD` env user as a bootstrap fallback. Create admin users from the CLI:
@@ -135,11 +148,12 @@ curl localhost:8000/runs/<run_id>                   # -> status + per-agent stat
 `integration_id` is optional (omit it to use the legacy GitHub source from the project config);
 `intake_mode` is one of `raw_to_spec` (default), `spec_ready`, `raw_to_dev`.
 
-Or run once locally without Postgres (in-memory checkpointer):
+Or run once from the CLI (persists to Postgres, like the API):
 
 ```bash
 just list plane            # list open issues from the project's source repo
-just run plane 9213        # run the full graph once, print final state
+just run plane 9213        # run the full graph once, print final state (persists to Postgres)
+ash run --project plane --issue 9213 --ephemeral   # in-memory checkpointer (no Postgres)
 ```
 
 ### Configure `.env`

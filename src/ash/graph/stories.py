@@ -39,7 +39,14 @@ def build_stories(state: WorkflowState) -> tuple[dict[str, StoryState], list[str
     if spec is not None and spec.tickets:
         chosen = selected_ticket_ids(state)
         tickets = list(spec.tickets)
-        if state.story_mode == "single":
+        # The workbench "build first story" action (decision #29) forces single-story regardless of
+        # the run's story_mode, so the manual Dev follow-up only ever creates one PR.
+        effective_mode = (
+            "single"
+            if (state.pm_only and state.pm.next_action == "build")
+            else state.story_mode
+        )
+        if effective_mode == "single":
             # Single mode always produces at most one story — the first non-spike
             # (or the first ticket overall if all are spikes). Human checkbox selections
             # are ignored in single mode so the user can't accidentally create multiple PRs
@@ -52,8 +59,11 @@ def build_stories(state: WorkflowState) -> tuple[dict[str, StoryState], list[str
             tickets = list(spec.tickets)[:1]
         valid_ids = {t.id for t in tickets}
         for t in tickets:
+            # Only carry a prior story forward when it's in the chosen set — a stale `stories`
+            # dict from an earlier multi-story run can't leak extra stories into single mode
+            # (the loop already iterates only `tickets`, but this guards an id that survived).
             prior = existing.get(t.id)
-            if prior is not None:
+            if prior is not None and t.id in valid_ids:
                 stories[t.id] = prior
                 continue
             stories[t.id] = StoryState(

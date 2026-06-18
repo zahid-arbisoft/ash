@@ -24,7 +24,7 @@ from ash.config.settings import (
 )
 from ash.db.base import get_session
 from ash.db.models import Connector, RunRecord, SpecRecord
-from ash.db.runs import search_spec_records
+from ash.db.runs import list_workbench_runs, search_spec_records
 from ash.graph.runner import Runner
 
 router = APIRouter()
@@ -187,11 +187,15 @@ async def run_create(
     task_sink_id: Annotated[str, Form()] = "",
     ticket_id: Annotated[str, Form()] = "",
     story_mode: Annotated[str, Form()] = "single",
+    pm_only: Annotated[str, Form()] = "",
     attachments: list[UploadFile] = File(default=[]),  # noqa: B008 — FastAPI form dependency
 ) -> RedirectResponse:
     int_id = int(integration_id) if integration_id else None
     sink_id = int(task_sink_id) if task_sink_id else None
     mode = story_mode if story_mode in ("single", "multiple") else "single"
+    # PM workbench (decision #29): a pm_only run generates/refines the spec and stops; land the
+    # user on the workbench rather than the build timeline.
+    workbench = pm_only.strip().lower() in ("1", "true", "on", "yes")
     paths = await _save_uploads(attachments)
     run_id = await _runner(request).start_run(
         project=project,
@@ -202,6 +206,7 @@ async def run_create(
         task_sink_id=sink_id,
         ticket_id=ticket_id.strip(),
         story_mode=mode,
+        pm_only=workbench,
     )
     session.add(
         RunRecord(
@@ -213,10 +218,12 @@ async def run_create(
             intake_mode=intake_mode,
             ticket_id=ticket_id.strip(),
             story_mode=mode,
+            pm_only=workbench,
         )
     )
     await session.commit()
-    return RedirectResponse(url=f"/ui/runs/{run_id}", status_code=303)
+    dest = f"/ui/pm/{run_id}" if workbench else f"/ui/runs/{run_id}"
+    return RedirectResponse(url=dest, status_code=303)
 
 
 async def _save_uploads(files: list[UploadFile]) -> list[str]:
@@ -329,6 +336,31 @@ async def run_status(request: Request, run_id: str) -> HTMLResponse:
             "metrics": metrics,
             "triggers": triggers,
         },
+    )
+
+
+@router.get("/ui/runs/{run_id}/llm", response_class=HTMLResponse)
+async def run_llm_io(
+    request: Request, run_id: str, session: Annotated[AsyncSession, Depends(get_session)]
+) -> HTMLResponse:
+    """The agent↔LLM transcript for a run (decision #30): every prompt sent + response received,
+    grouped by story + agent, in capture order."""
+    from ash.db.exchanges import list_exchanges_for_run
+
+    rows = await list_exchanges_for_run(session, run_id)
+    # Group (ticket_id, agent_name) into sections, preserving capture order.
+    groups: list[dict[str, Any]] = []
+    index: dict[tuple[str, str], dict[str, Any]] = {}
+    for r in rows:
+        key = (r.ticket_id or "", r.agent_name)
+        grp = index.get(key)
+        if grp is None:
+            grp = {"ticket_id": r.ticket_id or "", "agent_name": r.agent_name, "exchanges": []}
+            index[key] = grp
+            groups.append(grp)
+        grp["exchanges"].append(r)
+    return templates.TemplateResponse(
+        request, "llm_exchanges.html", {"run_id": run_id, "groups": groups, "total": len(rows)}
     )
 
 
@@ -756,12 +788,165 @@ async def pm_runs(
     return templates.TemplateResponse(request, template, ctx)
 
 
+@router.get("/ui/pm-workbench", response_class=HTMLResponse)
+async def pm_workbench_list(
+    request: Request,
+    session: Annotated[AsyncSession, Depends(get_session)],
+    page: int = Query(default=1, ge=1),
+    q: str = Query(default=""),
+    project: str = Query(default=""),
+) -> HTMLResponse:
+    """Direct listing of PM workbench runs (pm_only) — rows open /ui/pm/{run_id} (decision #30)."""
+    rows, total = await list_workbench_runs(
+        session, query=q, project=project, page=page, per_page=_PER_PAGE
+    )
+    pages = max(1, (total + _PER_PAGE - 1) // _PER_PAGE)
+    ctx = {
+        "rows": rows,
+        "page": page,
+        "pages": pages,
+        "total": total,
+        "q": q,
+        "filter_project": project,
+        "projects": _projects(),
+    }
+    template = (
+        "_pm_workbench_runs_results.html"
+        if request.headers.get("HX-Request")
+        else "pm_workbench_runs.html"
+    )
+    return templates.TemplateResponse(request, template, ctx)
+
+
 @router.get("/ui/pm-runs/{run_id}", response_class=HTMLResponse)
 async def pm_run_detail(
     request: Request, run_id: str, session: Annotated[AsyncSession, Depends(get_session)]
 ) -> HTMLResponse:
     rec = await session.get(SpecRecord, run_id)
     return templates.TemplateResponse(request, "pm_run_detail.html", {"rec": rec, "run_id": run_id})
+
+
+# ── PM workbench: run PM standalone, review & iterate on stories (decision #29) ──────────────
+# NOTE: /ui/pm/new MUST be declared before /ui/pm/{run_id} so it isn't captured as a run_id.
+
+
+@router.get("/ui/pm/new", response_class=HTMLResponse)
+async def pm_new(
+    request: Request, session: Annotated[AsyncSession, Depends(get_session)]
+) -> HTMLResponse:
+    """Start-a-PM-run form — reuses run_new.html in `pm_mode` (posts pm_only=true to /ui/runs)."""
+    sources = list(
+        (await session.execute(select(Connector).where(Connector.is_source, Connector.enabled)))
+        .scalars()
+        .all()
+    )
+    sinks = list(
+        (await session.execute(select(Connector).where(Connector.is_sink, Connector.enabled)))
+        .scalars()
+        .all()
+    )
+    return templates.TemplateResponse(
+        request,
+        "run_new.html",
+        {
+            "sources": sources,
+            "sinks": sinks,
+            "projects": _projects(),
+            "modes": ["raw_to_spec", "spec_ready"],  # workbench always runs PM
+            "pm_mode": True,
+        },
+    )
+
+
+def _pm_view_ctx(run_id: str, state: dict[str, Any] | None) -> dict[str, Any]:
+    """Shared template context for the workbench page. `live_stream` = PM is actively generating
+    (no spec yet / mid-regenerate) → render the SSE shell; otherwise render the body directly."""
+    state = state or {}
+    pending = bool(state.get("pending_review"))
+    live_stream = state.get("status") == "running" and not pending
+    return {"run_id": run_id, "state": state, "live_stream": live_stream}
+
+
+@router.get("/ui/pm/{run_id}", response_class=HTMLResponse)
+async def pm_workbench(request: Request, run_id: str) -> HTMLResponse:
+    state = await _runner(request).get_run(run_id)
+    return templates.TemplateResponse(request, "pm_workbench.html", _pm_view_ctx(run_id, state))
+
+
+@router.get("/ui/pm/{run_id}/events")
+async def pm_workbench_events(request: Request, run_id: str) -> StreamingResponse:
+    """Stream the workbench body while PM (re)generates; close once the spec is ready (review
+    gate) or the run terminates. Mirrors the run-timeline SSE pattern."""
+    runner = _runner(request)
+    body = templates.get_template("_pm_workbench_body.html")
+
+    async def gen() -> AsyncIterator[str]:
+        for _ in range(800):  # ~20 min safety bound; the client reconnects if needed
+            if await request.is_disconnected():
+                return
+            state = await runner.get_run(run_id) or {}
+            yield _sse(body.render(run_id=run_id, state=state), event="message")
+            if state.get("pending_review") or state.get("status") in _TERMINAL:
+                yield _sse("", event="done")
+                return
+            await asyncio.sleep(1.5)
+        yield _sse("", event="done")
+
+    return StreamingResponse(gen(), media_type="text/event-stream")
+
+
+@router.post("/ui/pm/{run_id}/regenerate", response_class=HTMLResponse)
+async def pm_regenerate(
+    request: Request,
+    run_id: str,
+    feedback: Annotated[str, Form()] = "",
+    story_mode: Annotated[str, Form()] = "",
+) -> HTMLResponse:
+    """Re-run PM with spec-level feedback; swap in the streaming shell while it regenerates."""
+    mode = story_mode if story_mode in ("single", "multiple") else None
+    await _runner(request).regenerate_spec(
+        run_id, feedback=feedback.strip(), story_mode=mode, wait=False
+    )
+    return templates.TemplateResponse(request, "_pm_regenerating.html", {"run_id": run_id})
+
+
+@router.post("/ui/pm/{run_id}/stories/{ticket_id}/refine", response_class=HTMLResponse)
+async def pm_refine_story(
+    request: Request, run_id: str, ticket_id: str, feedback: Annotated[str, Form()] = ""
+) -> HTMLResponse:
+    """Refine ONE ticket in place; return just that re-rendered card (HTMX outerHTML swap)."""
+    state = await _runner(request).refine_ticket(
+        run_id, ticket_id=ticket_id, feedback=feedback.strip()
+    )
+    pm = (state or {}).get("pm") or {}
+    spec = pm.get("spec") or {}
+    fb = pm.get("ticket_feedback") or {}
+    ticket = next((t for t in spec.get("tickets", []) if t.get("id") == ticket_id), None)
+    if ticket is None:
+        return HTMLResponse("")  # ticket gone — nothing to swap
+    return templates.TemplateResponse(
+        request,
+        "_pm_story_card.html",
+        {"t": ticket, "run_id": run_id, "refined": ticket_id in fb},
+    )
+
+
+@router.post("/ui/pm/{run_id}/rfc")
+async def pm_generate_rfc(request: Request, run_id: str) -> RedirectResponse:
+    """Manual follow-up: approve the spec and generate an RFC, then stop. Watch on the run page."""
+    await _runner(request).resume_run(
+        run_id, {"action": "approve", "next": "rfc"}, background=True
+    )
+    return RedirectResponse(url=f"/ui/runs/{run_id}", status_code=303)
+
+
+@router.post("/ui/pm/{run_id}/build")
+async def pm_build_first_story(request: Request, run_id: str) -> RedirectResponse:
+    """Manual follow-up: approve the spec and build the FIRST story with the Dev pipeline."""
+    await _runner(request).resume_run(
+        run_id, {"action": "approve", "next": "build"}, background=True
+    )
+    return RedirectResponse(url=f"/ui/runs/{run_id}", status_code=303)
 
 
 # ── U3: agents overview ──────────────────────────────────────────────────────

@@ -49,10 +49,48 @@ class BaseAgent(ABC):
         # Accumulated token counts for the current run() call.  Agents reset this at the top of
         # run() (agents are singletons; _usage must be zeroed before each invocation).
         self._usage: dict[str, int] = {"prompt_tokens": 0, "completion_tokens": 0}
+        # Captured agent↔LLM exchanges for the current run (decision #30). The node wrapper
+        # resets this before run() and persists it after; refine paths persist directly.
+        self._exchanges: list[dict[str, Any]] = []
 
     def _reset_usage(self) -> None:
         """Zero token counters — call at the top of every agent's run()."""
         self._usage = {"prompt_tokens": 0, "completion_tokens": 0}
+
+    def reset_exchanges(self) -> None:
+        """Clear the captured LLM-I/O buffer — called by the node wrapper before each run()."""
+        self._exchanges = []
+
+    def _capture_exchange(
+        self,
+        *,
+        phase: str,
+        request: Any,
+        response: dict[str, Any],
+        prompt_tokens: int = 0,
+        completion_tokens: int = 0,
+        step: int = 0,
+    ) -> None:
+        """Append one LLM exchange (messages in + response out) to the capture buffer.
+
+        Guarded by `persist_llm_exchanges` (default True). Best-effort — never raise into the
+        agent's hot path."""
+        if not getattr(self.settings, "persist_llm_exchanges", True):
+            return
+        try:
+            self._exchanges.append(
+                {
+                    "phase": phase,
+                    "step": step,
+                    "model": self.settings.model_for(self.name).model,
+                    "request": _messages_to_records(request),
+                    "response": response,
+                    "prompt_tokens": int(prompt_tokens),
+                    "completion_tokens": int(completion_tokens),
+                }
+            )
+        except Exception:  # noqa: BLE001 — capture must never break a run
+            pass
 
     def _add_usage(self, metadata: Any) -> None:
         """Merge token counts from a LangChain usage_metadata or response_metadata dict."""
@@ -212,7 +250,7 @@ class BaseAgent(ABC):
                 # _extract, which must stay neutral; see _EXTRACT_SYSTEM).
                 messages = [SystemMessage(content=system), HumanMessage(content=user)]
                 t0 = time.monotonic()
-                result = await self._invoke_structured(schema, messages)
+                result = await self._invoke_structured(schema, messages, phase="single_call")
                 logger.info(
                     "[agent:%s] single-call completed in %.1fs", self.name, time.monotonic() - t0
                 )
@@ -335,11 +373,25 @@ class BaseAgent(ABC):
                 break
             rolling.append(ai)
             # Accumulate token usage (LangChain normalises to usage_metadata on AIMessage).
-            self._add_usage(ai.usage_metadata or {})
+            um: dict[str, int] = ai.usage_metadata or {}  # type: ignore[assignment]
+            self._add_usage(um)
             text = ai.content if isinstance(ai.content, str) else _text_of(ai.content)
             if text.strip():
                 last_text = text
             tool_calls = ai.tool_calls or []
+            self._capture_exchange(
+                phase="explore",
+                step=step + 1,
+                request=msgs,
+                response={
+                    "content": _clip(text),
+                    "tool_calls": [
+                        {"name": tc.get("name"), "args": tc.get("args")} for tc in tool_calls
+                    ],
+                },
+                prompt_tokens=um.get("input_tokens", 0),
+                completion_tokens=um.get("output_tokens", 0),
+            )
             if not tool_calls:
                 break
             for tc in tool_calls:
@@ -408,13 +460,15 @@ class BaseAgent(ABC):
             self.name, chars, est, schema.__name__,
         )
         t0 = time.monotonic()
-        result = await self._invoke_structured(schema, messages)
+        result = await self._invoke_structured(schema, messages, phase="extract")
         logger.info(
             "[agent:%s] _extract completed in %.1fs", self.name, time.monotonic() - t0
         )
         return result
 
-    async def _invoke_structured(self, schema: type[T], messages: list[Any]) -> T:
+    async def _invoke_structured(
+        self, schema: type[T], messages: list[Any], *, phase: str = "single_call"
+    ) -> T:
         """One tool-free structured call via `with_structured_output`, with usage tracking.
 
         Shared by the no-tools path in generate() and _extract. include_raw=True returns
@@ -425,9 +479,25 @@ class BaseAgent(ABC):
         raw_result: Any = await chain.ainvoke(messages)
         if isinstance(raw_result, dict) and "raw" in raw_result:
             raw_ai = raw_result.get("raw")
-            self._add_usage(getattr(raw_ai, "usage_metadata", None) or {})
-            self._add_usage(getattr(raw_ai, "response_metadata", {}).get("token_usage") or {})
-            return cast(T, raw_result["parsed"])
+            um: dict[str, int] = getattr(raw_ai, "usage_metadata", None) or {}
+            tu: dict[str, int] = getattr(raw_ai, "response_metadata", {}).get("token_usage") or {}
+            self._add_usage(um)
+            self._add_usage(tu)
+            parsed = raw_result["parsed"]
+            self._capture_exchange(
+                phase=phase,
+                request=messages,
+                response={
+                    "content": _clip(_text_of(getattr(raw_ai, "content", "") or "")),
+                    "parsed": _jsonable(parsed),
+                },
+                prompt_tokens=um.get("input_tokens", 0) + tu.get("prompt_tokens", 0),
+                completion_tokens=um.get("output_tokens", 0) + tu.get("completion_tokens", 0),
+            )
+            return cast(T, parsed)
+        self._capture_exchange(
+            phase=phase, request=messages, response={"parsed": _jsonable(raw_result)}
+        )
         return cast(T, raw_result)
 
 
@@ -455,6 +525,40 @@ def _prompt_size(messages: Any) -> tuple[int, int]:
         content = getattr(m, "content", m)
         chars += len(_text_of(content)) if not isinstance(content, str) else len(content)
     return chars, chars // 4
+
+
+# ── LLM I/O capture (decision #30) ───────────────────────────────────────────
+# Max chars stored per message/response field — bounds DB row size; longer content is clipped
+# with a marker (we capture for inspection, not replay).
+_EXCHANGE_MAX_CHARS = 16_000
+
+_ROLE_BY_TYPE = {"system": "system", "human": "user", "ai": "assistant", "tool": "tool"}
+
+
+def _clip(text: str) -> str:
+    if len(text) <= _EXCHANGE_MAX_CHARS:
+        return text
+    return text[:_EXCHANGE_MAX_CHARS] + f"\n… (clipped, {len(text)} chars total)"
+
+
+def _messages_to_records(messages: Any) -> list[dict[str, str]]:
+    """Convert a LangChain message list into compact [{role, content}] dicts for storage."""
+    out: list[dict[str, str]] = []
+    for m in messages:
+        role = _ROLE_BY_TYPE.get(getattr(m, "type", ""), getattr(m, "type", "") or "user")
+        out.append({"role": role, "content": _clip(_text_of(getattr(m, "content", m)))})
+    return out
+
+
+def _jsonable(value: Any) -> Any:
+    """Best-effort JSON-safe rendering of a structured result for storage."""
+    dump = getattr(value, "model_dump", None)
+    if callable(dump):
+        try:
+            return dump(mode="json")
+        except Exception:  # noqa: BLE001
+            return _clip(str(value))
+    return _clip(str(value))
 
 
 class GuardrailBlockedError(RuntimeError):

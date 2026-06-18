@@ -156,6 +156,13 @@ class Settings(BaseSettings):
     # into each per-ticket elaboration call.
     pm_detail_tickets: bool = True
     pm_detail_context_chars: int = 24_000
+    # LLM I/O capture (decision #30) — persist every agent↔LLM exchange (prompt + response) to the
+    # agent_llm_exchanges table for the per-run "LLM I/O" view. Set False to disable (privacy/size).
+    persist_llm_exchanges: bool = True
+    # PM estimates (decision #29) — the LLM fills the estimate fields, then a deterministic Python
+    # repair pass normalizes them. `pm_estimate_speedup` is the traditional→LLM divisor used when
+    # the model didn't give a sane llm_estimate (traditional_days / this). 5–8× is realistic.
+    pm_estimate_speedup: float = 6.0
 
     # logging
     log_level: str = "INFO"

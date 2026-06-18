@@ -16,7 +16,10 @@
     <h1 class="text-xl font-semibold">{{ spec.epic.title }}</h1>
     <p class="text-sm text-muted mt-0.5">{{ rec.project }} · {{ rec.item_id }} · {{ rec.created_at.strftime("%b %d, %Y %H:%M") }}</p>
   </div>
-  <a href="/ui/runs/{{ run_id }}" class="text-sm text-accent hover:underline">Live run →</a>
+  <div class="flex items-center gap-4">
+    <a href="/ui/pm/{{ run_id }}" class="text-sm text-accent hover:underline">Open in workbench →</a>
+    <a href="/ui/runs/{{ run_id }}" class="text-sm text-muted hover:text-fg hover:underline">Live run →</a>
+  </div>
 </div>
 
 <section class="bg-surface border border-border rounded-xl p-5 mb-4">

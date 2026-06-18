@@ -8,7 +8,7 @@ fails an agent run.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -98,4 +98,55 @@ async def search_spec_records(
     rows = list(
         (await session.execute(stmt.limit(per_page).offset((page - 1) * per_page))).scalars().all()
     )
+    return rows, total
+
+
+async def list_workbench_runs(
+    session: AsyncSession,
+    *,
+    query: str = "",
+    project: str = "",
+    page: int = 1,
+    per_page: int = 20,
+) -> tuple[list[dict[str, Any]], int]:
+    """Paginated listing of PM workbench runs (RunRecord.pm_only=True), newest first.
+
+    Sources from RunRecord — not SpecRecord — so runs still generating (no spec yet) are included.
+    Each row is enriched with its SpecRecord summary (epic_title / ticket_count) via one IN query,
+    so rows without a spec yet fall back to the item id in the template.
+    """
+    from sqlalchemy import func
+
+    stmt = (
+        select(RunRecord)
+        .where(RunRecord.pm_only.is_(True))
+        .order_by(RunRecord.created_at.desc())
+    )
+    if project:
+        stmt = stmt.where(RunRecord.project == project)
+    if query:
+        stmt = stmt.where(RunRecord.item_id.ilike(f"%{query}%"))
+    total: int = (
+        await session.execute(select(func.count()).select_from(stmt.subquery()))
+    ).scalar_one()
+    runs = list(
+        (await session.execute(stmt.limit(per_page).offset((page - 1) * per_page))).scalars().all()
+    )
+    # Enrich with spec summaries in one query over this page's run_ids.
+    specs: dict[str, SpecRecord] = {}
+    if runs:
+        spec_rows = await session.execute(
+            select(SpecRecord).where(SpecRecord.run_id.in_([r.run_id for r in runs]))
+        )
+        specs = {s.run_id: s for s in spec_rows.scalars().all()}
+    rows: list[dict[str, Any]] = []
+    for r in runs:
+        spec = specs.get(r.run_id)
+        rows.append(
+            {
+                "run": r,
+                "epic_title": spec.epic_title if spec else None,
+                "ticket_count": spec.ticket_count if spec else None,
+            }
+        )
     return rows, total

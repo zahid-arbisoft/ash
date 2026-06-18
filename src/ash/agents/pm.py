@@ -18,6 +18,7 @@ from typing import Any
 from langgraph.types import interrupt
 
 from ash.agents.base import BaseAgent
+from ash.agents.estimates import repair_spec_estimates, repair_ticket_estimates
 from ash.agents.spec_validator import validate_spec
 from ash.clients.board import get_board
 from ash.config.settings import load_project
@@ -190,8 +191,29 @@ _USER_ELABORATE = """\
 - needs_research: {needs_research}
 - dependencies: {deps}
 - current (thin) description: {desc}
-
+{feedback}
 Return the FULLY DETAILED ticket.\
+"""
+
+# ── PM workbench (decision #29): feedback the reviewer wants applied on regenerate ──
+
+_USER_FEEDBACK = """\
+
+## Reviewer feedback on your PREVIOUS spec — you MUST address this
+The reviewer was not satisfied with the previous spec and asked for these changes. Regenerate the \
+WHOLE spec, keeping what was good and applying this feedback directly:
+
+{feedback}
+
+For reference, your previous spec was:
+{prev_spec}
+--- end previous spec ---\
+"""
+
+_TICKET_FEEDBACK_BLOCK = """\
+
+## Reviewer feedback on THIS ticket — you MUST address it
+{feedback}\
 """
 
 # ── correction round: feed deterministic validation errors back for one self-fix ──
@@ -245,12 +267,24 @@ class PMAgent(BaseAgent):
                 "Output the smallest valid JSON that fully represents the requirements."
             )
 
-        spec = await self.generate(Spec, system=system, user=user.format(context=context))
+        user_prompt = user.format(context=context)
+        # PM workbench regenerate (decision #29): fold the reviewer's spec-level feedback (plus the
+        # previous spec for grounding) into the prompt so the new spec actually addresses it.
+        if state.pm.feedback:
+            prev = state.pm.spec.model_dump_json(indent=2) if state.pm.spec else "(none)"
+            user_prompt += _USER_FEEDBACK.format(
+                feedback=state.pm.feedback, prev_spec=prev[: self.settings.pm_detail_context_chars]
+            )
+
+        spec = await self.generate(Spec, system=system, user=user_prompt)
         spec = await self._validate_and_repair(spec, system=system, context=context)
         # Skip the per-ticket elaboration pass for small-context models — the initial pass is
         # already at the token ceiling; elaborate would hit LengthFinishReasonError on every ticket.
         if not compact and getattr(self.settings, "pm_detail_tickets", True):
             spec = await self._elaborate_tickets(spec, context=context)
+        # Deterministic estimate repair (decision #29) — runs in BOTH paths, so compact-mode runs
+        # (which skip elaborate) still get sane traditional + LLM-assisted numbers.
+        spec = repair_spec_estimates(spec, speedup=self.settings.pm_estimate_speedup)
 
         item_id = state.item_id or "upload"
         board = get_board(project.runtime_dir / "board")
@@ -281,6 +315,11 @@ class PMAgent(BaseAgent):
                 "board_ref": board_ref,
                 "note": note,
                 "tokens": dict(self._usage),
+                # Carry-forward (PMState has no reducer → wholesale replace): clear the consumed
+                # feedback, keep the iteration counter and any prior per-ticket feedback.
+                "feedback": None,
+                "regeneration_count": state.pm.regeneration_count,
+                "ticket_feedback": dict(state.pm.ticket_feedback),
             }
         }
 
@@ -336,36 +375,57 @@ class PMAgent(BaseAgent):
         detailed: list[Ticket] = []
         for t in spec.tickets:
             try:
-                user = _USER_ELABORATE.format(
-                    context=ctx,
-                    epic=epic,
-                    tid=t.id,
-                    title=t.title,
-                    ttype=getattr(t.type, "value", t.type),
-                    needs_research=t.needs_research,
-                    deps=", ".join(t.dependencies) or "none",
-                    desc=t.description,
-                )
-                rich = await self.generate(Ticket, system=_SYSTEM_ELABORATE, user=user)
+                detailed.append(await self._elaborate_one(t, epic=epic, ctx=ctx))
             except Exception as exc:  # noqa: BLE001 — detailing is best-effort; keep the original
                 logger.warning("[pm] ticket %s detail pass failed (%s); keeping it", t.id, exc)
                 detailed.append(t)
-                continue
-            # Force structural fields back to the validated skeleton; keep the richer content.
-            rich.id = t.id
-            rich.type = t.type
-            rich.dependencies = t.dependencies
-            rich.needs_research = t.needs_research
-            rich.title = t.title or rich.title
-            rich.estimate = rich.estimate or t.estimate
-            if not rich.description.strip():
-                rich.description = t.description
-            if not rich.acceptance_criteria:
-                rich.acceptance_criteria = t.acceptance_criteria
-            detailed.append(rich)
 
         spec.tickets = detailed
         return spec
+
+    async def _elaborate_one(
+        self, ticket: Ticket, *, epic: str, ctx: str, feedback: str = ""
+    ) -> Ticket:
+        """Expand ONE ticket in a focused call (decision #27/#29). Forces structural fields back to
+        the skeleton so the validated dependency graph can't drift, then repairs its estimates.
+        `feedback` (optional) carries reviewer notes for the per-story refine path."""
+        fb = _TICKET_FEEDBACK_BLOCK.format(feedback=feedback) if feedback.strip() else ""
+        user = _USER_ELABORATE.format(
+            context=ctx,
+            epic=epic,
+            tid=ticket.id,
+            title=ticket.title,
+            ttype=getattr(ticket.type, "value", ticket.type),
+            needs_research=ticket.needs_research,
+            deps=", ".join(ticket.dependencies) or "none",
+            desc=ticket.description,
+            feedback=fb,
+        )
+        rich = await self.generate(Ticket, system=_SYSTEM_ELABORATE, user=user)
+        # Force structural fields back to the validated skeleton; keep the richer content.
+        rich.id = ticket.id
+        rich.type = ticket.type
+        rich.dependencies = ticket.dependencies
+        rich.needs_research = ticket.needs_research
+        rich.title = ticket.title or rich.title
+        rich.estimate = rich.estimate or ticket.estimate
+        if not rich.description.strip():
+            rich.description = ticket.description
+        if not rich.acceptance_criteria:
+            rich.acceptance_criteria = ticket.acceptance_criteria
+        return repair_ticket_estimates(rich, speedup=self.settings.pm_estimate_speedup)
+
+    async def refine_ticket(self, spec: Spec, ticket_id: str, feedback: str) -> Ticket | None:
+        """PM workbench per-story refine (decision #29): re-elaborate ONE ticket of `spec` with the
+        reviewer's feedback. Returns the refined ticket, or None if the id isn't in the spec."""
+        self._reset_usage()
+        target = next((t for t in spec.tickets if t.id == ticket_id), None)
+        if target is None:
+            return None
+        epic = f"{spec.epic.title}\n{spec.epic.summary}\n{spec.epic.business_goal}"
+        cap = getattr(self.settings, "pm_detail_context_chars", 24_000)
+        ctx = (spec.technical_spec.approach or "")[:cap]
+        return await self._elaborate_one(target, epic=epic, ctx=ctx, feedback=feedback)
 
 
 class PMPublishAgent(BaseAgent):
@@ -385,13 +445,24 @@ class PMPublishAgent(BaseAgent):
         # human's per-story selection (decision #26 / §4.2): {"action": "approve",
         # "stories": ["T1", "T3"]} — only those tickets become stories.
         raw_decision: Any = interrupt("spec_review")
+        next_action = ""
         if isinstance(raw_decision, dict):
             action = str(raw_decision.get("action", "approve"))
             selection = raw_decision.get("stories")
             story_selection = [str(s) for s in selection] if isinstance(selection, list) else None
+            # PM workbench (decision #29): the manual follow-up the reviewer chose at the gate.
+            nxt = str(raw_decision.get("next", ""))
+            next_action = nxt if nxt in ("rfc", "build") else ""
         else:
             action = str(raw_decision)
             story_selection = None
+
+        # Fields every return must carry forward (PMState has no reducer → wholesale replace).
+        carry = {
+            "regeneration_count": state.pm.regeneration_count,
+            "ticket_feedback": dict(state.pm.ticket_feedback),
+            "next_action": next_action,
+        }
 
         if action == "reject":
             return {
@@ -400,6 +471,7 @@ class PMPublishAgent(BaseAgent):
                     "board_ref": state.pm.board_ref,
                     "ticket_refs": [],
                     "note": "ticket push cancelled by reviewer",
+                    **carry,
                 }
             }
 
@@ -432,5 +504,6 @@ class PMPublishAgent(BaseAgent):
                 "story_selection": story_selection,
                 "note": note,
                 "tokens": dict(self._usage),
+                **carry,
             }
         }

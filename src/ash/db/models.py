@@ -91,6 +91,7 @@ class RunRecord(Base):
     intake_mode: Mapped[str] = mapped_column(String(40))
     ticket_id: Mapped[str] = mapped_column(String(120), default="")  # build scoped to one ticket
     story_mode: Mapped[str] = mapped_column(String(20), default="single")  # single | multiple
+    pm_only: Mapped[bool] = mapped_column(Boolean, default=False)  # PM workbench run (decision #29)
     status: Mapped[str] = mapped_column(String(40), default="running")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
@@ -237,6 +238,38 @@ class AgentRunMetric(Base):
 
     def __str__(self) -> str:
         return f"Metric[{self.run_id}/{self.agent_name} {self.total_tokens}tok]"
+
+
+class AgentLLMExchange(Base):
+    """One agent↔LLM exchange (decision #30) — the messages sent to the model and the response.
+
+    Persisted so a human can inspect exactly what produced a spec/plan/code. One agent run() can
+    emit several rows (e.g. PM: spec + repair + per-ticket elaborate). Keyed to the run and — for
+    build-team agents — the story (`ticket_id`). Plain app table (created by create_all). Message
+    content is clipped at capture time to keep rows bounded.
+    """
+
+    __tablename__ = "agent_llm_exchanges"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    run_id: Mapped[str] = mapped_column(String(64), index=True)
+    project: Mapped[str] = mapped_column(String(200), default="")
+    ticket_id: Mapped[str | None] = mapped_column(String(120), default=None)
+    agent_name: Mapped[str] = mapped_column(String(40))
+    phase: Mapped[str] = mapped_column(String(20), default="")  # single_call|explore|extract|refine
+    step: Mapped[int] = mapped_column(Integer, default=0)  # explore-loop ordinal; 0 otherwise
+    model: Mapped[str] = mapped_column(String(200), default="")
+    request: Mapped[list[Any]] = mapped_column(JSON, default=list)  # [{role, content}]
+    # {content, tool_calls?, parsed?}
+    response: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    prompt_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    completion_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (Index("ix_agent_llm_exchanges_run", "run_id"),)
+
+    def __str__(self) -> str:
+        return f"Exchange[{self.run_id}/{self.agent_name}/{self.phase}]"
 
 
 class AgentPolicyRecord(Base):

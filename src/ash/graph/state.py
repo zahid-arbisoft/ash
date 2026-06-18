@@ -45,6 +45,16 @@ class PMState(BaseModel):
     note: str | None = None
     error: str | None = None
     tokens: dict[str, int] | None = None  # {"prompt_tokens": N, "completion_tokens": N}
+    # ── PM workbench feedback loop (decision #29) ──────────────────────────────────────────
+    # Spec-level free-text feedback the reviewer wants applied; consumed once by PMAgent.run on
+    # the next regenerate, then cleared. Per-ticket feedback is keyed by ticket id (used by the
+    # single-ticket refine path). regeneration_count powers the "v3" iteration badge.
+    feedback: str | None = None
+    ticket_feedback: dict[str, str] = Field(default_factory=dict)
+    regeneration_count: int = 0
+    # The manual follow-up the reviewer picked at the workbench gate (decision #29): "" = stop
+    # after the spec, "rfc" = generate an RFC then stop, "build" = build the first story.
+    next_action: Literal["", "rfc", "build"] = ""
 
 
 class ResearchState(BaseModel):
@@ -158,6 +168,9 @@ class WorkflowState(BaseModel):
     task_sink_id: int | None = None  # where PM pushes tickets (None → admin default → file board)
     ticket_id: str = ""  # optional: scope the build team (research/coding) to ONE spec ticket
     story_mode: StoryMode = "single"  # PM produces one story (default) or many
+    # PM workbench (decision #29): a pm_only run generates/refines the spec and STOPS — it never
+    # auto-flows into rfc/build. The workbench routers read this; full pipeline runs leave it False.
+    pm_only: bool = False
 
     # discovered during the run
     raw_issue: RawIssue | None = None

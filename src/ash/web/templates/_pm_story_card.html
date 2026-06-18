@@ -1,0 +1,86 @@
+{# PM workbench story card (decision #29). Context: t (ticket dict), run_id, refined (bool).
+   Rendered in the workbench grid AND returned standalone as the outerHTML swap target for the
+   per-story refine action. Alpine drives expand/collapse + the inline refine textarea. #}
+<div id="story-{{ t.id }}"
+     x-data="{ open: false, refine: false }"
+     @cards-open.window="open = true" @cards-close.window="open = false"
+     class="bg-surface border rounded-lg p-4 transition-colors
+            {% if refined %}border-accent/50{% else %}border-border{% endif %}">
+  <div class="flex items-center gap-2 mb-1">
+    <span class="font-mono text-xs text-accent">{{ t.id }}</span>
+    <span class="text-[10px] px-1.5 py-0.5 rounded bg-border text-muted">{{ t.type }}</span>
+    {% if t.needs_research %}<span class="text-[10px] px-1.5 py-0.5 rounded bg-warn/15 text-warn">spike</span>{% endif %}
+    {% if refined %}<span class="text-[10px] px-1.5 py-0.5 rounded bg-accent/15 text-accent">⚡ refined</span>{% endif %}
+    {% if t.estimate or t.llm_estimate %}
+    <span class="ml-auto flex items-center gap-1.5 text-[10px]">
+      {% if t.estimate %}<span class="text-muted" title="Traditional estimate (without AI)">{{ t.estimate }}</span>{% endif %}
+      {% if t.llm_estimate %}<span class="px-1.5 py-0.5 rounded bg-ok/15 text-ok" title="With LLM pair-programming">⚡ {{ t.llm_estimate }}</span>{% endif %}
+    </span>
+    {% endif %}
+  </div>
+
+  <div class="text-sm font-medium">{{ t.title }}</div>
+  <p class="text-sm text-muted mt-1 whitespace-pre-line">{{ t.description }}</p>
+
+  {# Expandable detail — keeps dense specs scannable. #}
+  <div x-show="open" x-cloak x-collapse class="mt-3 space-y-2">
+    {% if t.implementation_notes %}
+    <div>
+      <span class="text-xs uppercase tracking-wide text-muted">Implementation notes</span>
+      <p class="text-sm text-muted mt-0.5 whitespace-pre-line">{{ t.implementation_notes }}</p>
+    </div>
+    {% endif %}
+    {% if t.affected_files %}
+    <div class="text-xs text-muted"><span class="text-fg">Affected files:</span>
+      {% for f in t.affected_files %}<code class="text-accent">{{ f }}</code>{% if not loop.last %}, {% endif %}{% endfor %}
+    </div>
+    {% endif %}
+    {% if t.data_model_changes %}
+    <div class="text-xs"><span class="text-fg">Data model:</span>
+      <ul class="list-disc list-inside text-muted mt-0.5">{% for d in t.data_model_changes %}<li>{{ d }}</li>{% endfor %}</ul>
+    </div>
+    {% endif %}
+    {% if t.api_changes %}
+    <div class="text-xs"><span class="text-fg">API:</span>
+      <ul class="list-disc list-inside text-muted mt-0.5">{% for a in t.api_changes %}<li>{{ a }}</li>{% endfor %}</ul>
+    </div>
+    {% endif %}
+    {% if t.acceptance_criteria %}
+    <div class="text-xs"><span class="text-fg">Acceptance criteria:</span>
+      <ul class="list-disc list-inside text-muted mt-0.5">{% for a in t.acceptance_criteria %}<li>{{ a }}</li>{% endfor %}</ul>
+    </div>
+    {% endif %}
+    {% if t.out_of_scope %}<div class="text-xs text-muted"><span class="text-fg">Out of scope:</span> {{ t.out_of_scope }}</div>{% endif %}
+    {% if t.dependencies %}<div class="text-[11px] text-muted">depends on: {{ t.dependencies|join(", ") }}</div>{% endif %}
+  </div>
+
+  {# Inline refine textarea (per-story feedback → re-elaborate this ticket only). #}
+  <div x-show="refine" x-cloak x-collapse class="mt-3">
+    <form hx-post="/ui/pm/{{ run_id }}/stories/{{ t.id }}/refine"
+          hx-target="#story-{{ t.id }}" hx-swap="outerHTML"
+          hx-indicator="#refine-ind-{{ t.id }}">
+      <textarea name="feedback" rows="2" required
+                placeholder="What should change about this story? e.g. 'tighten scope', 'add error handling to acceptance criteria'"
+                class="w-full bg-bg border border-border rounded-lg px-3 py-2 text-sm outline-none focus:border-accent"></textarea>
+      <div class="flex items-center gap-2 mt-2">
+        <button type="submit"
+                class="bg-accent text-bg font-semibold text-xs rounded-lg px-3 h-8 hover:brightness-110">
+          Refine ↻
+        </button>
+        <button type="button" @click="refine=false"
+                class="text-xs text-muted hover:text-fg px-2 h-8">Cancel</button>
+        <span id="refine-ind-{{ t.id }}" class="htmx-indicator text-xs text-muted">
+          <span class="animate-pulse text-accent">●</span> refining…
+        </span>
+      </div>
+    </form>
+  </div>
+
+  <div class="flex items-center gap-3 mt-2 text-xs">
+    <button type="button" @click="open=!open" class="text-muted hover:text-fg">
+      <span x-text="open ? '▾ Hide details' : '▸ Details'"></span>
+    </button>
+    <button type="button" @click="refine=!refine"
+            class="text-accent hover:underline">Refine this story</button>
+  </div>
+</div>
