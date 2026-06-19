@@ -10,6 +10,7 @@ import ash.admin._compat  # noqa: F401 — applies the sqladmin/wtforms boolean-
 from ash.admin.auth import AdminAuth
 from ash.admin.views import (
     AdminUserAdmin,
+    AgentLLMExchangeAdmin,
     AgentPolicyRecordAdmin,
     AgentRunMetricAdmin,
     AgentTaskAdmin,
@@ -35,5 +36,6 @@ def setup_admin(app: FastAPI, engine: AsyncEngine, settings: Settings) -> Admin:
     admin.add_view(AgentTaskAdmin)
     admin.add_view(AgentRunMetricAdmin)
     admin.add_view(AgentPolicyRecordAdmin)
+    admin.add_view(AgentLLMExchangeAdmin)
     admin.add_view(AdminUserAdmin)
     return admin

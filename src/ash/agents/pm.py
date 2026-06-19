@@ -15,6 +15,7 @@ import asyncio
 import logging
 from typing import Any
 
+from pydantic import BaseModel
 from langgraph.types import interrupt
 
 from ash.agents.base import BaseAgent
@@ -98,12 +99,13 @@ Your spec must:
 "spike" and `needs_research` to true (the Research agent will pick those up).
 - Assess risks honestly with severity and mitigations.
 
-Ticket quality bar — each ticket description must:
+Ticket quality bar — each ticket MUST be detailed:
 - State what needs to be built and why (user/system motivation).
-- Name the specific files, modules, endpoints, or schema fields involved.
-- Describe the implementation approach and any key design constraints.
-- Call out what is out of scope for this ticket.
-- Note any gotchas, edge cases, or cross-ticket dependencies.
+- Name specific files, modules, endpoints, or schema fields involved.
+- Describe the implementation approach and key design decisions.
+- Provide acceptance criteria (at least 2-3).
+- Provide traditional and LLM-assisted estimates (llm_estimate ≈ estimate / 6).
+- Call out what is out of scope.
 A developer must be able to pick up any ticket cold without asking follow-up questions.
 
 Be specific and grounded. Prefer the smallest change that fully satisfies the requirements.\
@@ -216,6 +218,44 @@ _TICKET_FEEDBACK_BLOCK = """\
 {feedback}\
 """
 
+# ── bulk elaboration ──
+
+_SYSTEM_BULK_ELABORATE = """\
+You are a senior tech lead expanding a set of implementation tickets in full detail for a \
+developer who will pick them up cold. You are given the full source requirements/spec, the epic, \
+and a list of thin tickets to expand.
+
+Expand EVERY ticket in the list into a thorough, self-contained implementation story. CRITICAL rules:
+1. PRESERVE specifics from the source spec — copy real model field names, endpoint paths, \
+task/queue names, file paths, and acceptance criteria into the tickets. Do NOT summarise it away.
+2. `description`: a complete narrative of WHAT to build and WHY (several sentences).
+3. `implementation_notes`: the HOW — concrete, ordered steps referencing real modules/classes/\
+functions; key design decisions and constraints. This must be substantial, not one line.
+4. `affected_files`: the actual files/paths this ticket touches.
+5. `api_changes` / `data_model_changes`: concrete endpoint and model/field changes from the spec \
+that belong to THIS ticket (empty lists if genuinely none).
+6. `acceptance_criteria`: 2-5 concrete, testable conditions, drawn from the spec where present.
+7. `out_of_scope`: what this ticket deliberately excludes (to bound it against sibling tickets).
+8. `estimate` / `estimate_days` / `llm_estimate` / `llm_estimate_days`: provide traditional and \
+LLM-assisted estimates (5-8x speedup). Use decimal days for the _days fields.
+
+Stay strictly within the scope implied by the outlines. Keep the ticket id, title, type, and \
+dependencies exactly as given. Return the list of FULLY DETAILED tickets.\
+"""
+
+_USER_BULK_ELABORATE = """\
+## Source requirements / spec (authoritative — preserve its detail)
+{context}
+
+## Epic
+{epic}
+
+## Tickets to expand (keep ids/titles/types/dependencies unchanged)
+{tickets}
+
+Return the FULLY DETAILED tickets.\
+"""
+
 # ── correction round: feed deterministic validation errors back for one self-fix ──
 
 _USER_CORRECTION = """\
@@ -233,6 +273,10 @@ Original requirements (for reference):
 
 --- end ---\
 """
+
+
+class Tickets(BaseModel):
+    tickets: list[Ticket]
 
 
 class PMAgent(BaseAgent):
@@ -255,20 +299,8 @@ class PMAgent(BaseAgent):
         system += _QUALITY_RULES
         system += _STORY_MODE_SINGLE if state.story_mode == "single" else _STORY_MODE_MULTIPLE
 
-        max_tokens = self.settings.model_for(self.name).max_tokens
-        compact = max_tokens <= 4096
-        if compact:
-            system += (
-                f"\n\nCOMPACT MODE (output token budget: {max_tokens}): "
-                "Keep EVERY text field to 1–2 sentences maximum. "
-                "acceptance_criteria: 1–2 items only. "
-                "affected_areas / api_changes / data_model_changes: omit unless critical. "
-                "open_questions: 1–2 items only. "
-                "Output the smallest valid JSON that fully represents the requirements."
-            )
-
         user_prompt = user.format(context=context)
-        # PM workbench regenerate (decision #29): fold the reviewer's spec-level feedback (plus the
+        # PM workbench regenerate: fold the reviewer's spec-level feedback (plus the
         # previous spec for grounding) into the prompt so the new spec actually addresses it.
         if state.pm.feedback:
             prev = state.pm.spec.model_dump_json(indent=2) if state.pm.spec else "(none)"
@@ -276,14 +308,13 @@ class PMAgent(BaseAgent):
                 feedback=state.pm.feedback, prev_spec=prev[: self.settings.pm_detail_context_chars]
             )
 
-        spec = await self.generate(Spec, system=system, user=user_prompt)
+        spec = await self.generate(Spec, system=system, user=user_prompt, context=context)
         spec = await self._validate_and_repair(spec, system=system, context=context)
-        # Skip the per-ticket elaboration pass for small-context models — the initial pass is
-        # already at the token ceiling; elaborate would hit LengthFinishReasonError on every ticket.
-        if not compact and getattr(self.settings, "pm_detail_tickets", True):
+
+        if getattr(self.settings, "pm_detail_tickets", True):
             spec = await self._elaborate_tickets(spec, context=context)
-        # Deterministic estimate repair (decision #29) — runs in BOTH paths, so compact-mode runs
-        # (which skip elaborate) still get sane traditional + LLM-assisted numbers.
+
+        # Deterministic estimate repair — ensure all tickets get sane traditional + LLM-assisted numbers.
         spec = repair_spec_estimates(spec, speedup=self.settings.pm_estimate_speedup)
 
         item_id = state.item_id or "upload"
@@ -346,7 +377,7 @@ class PMAgent(BaseAgent):
             prev_spec=spec.model_dump_json(indent=2),
             context=context,
         )
-        repaired = await self.generate(Spec, system=system, user=correction)
+        repaired = await self.generate(Spec, system=system, user=correction, context=context)
 
         remaining = validate_spec(repaired)
         if remaining:
@@ -358,19 +389,51 @@ class PMAgent(BaseAgent):
         return repaired
 
     async def _elaborate_tickets(self, spec: Spec, *, context: str) -> Spec:
-        """Second pass (decision #27): expand each ticket in its own focused call so it comes out
-        richly detailed instead of compressed into the all-in-one spec response.
+        """Second pass (decision #27/#32): expand each ticket so it comes out richly detailed
+        instead of compressed into the all-in-one spec response.
 
-        Best-effort and structure-preserving: on any per-ticket failure we keep the original
-        ticket, and we always force the id/title/type/dependencies back to the skeleton's values
-        so the dependency graph (already validated) can't drift. The source spec context is fed in
-        (capped) so a `spec_ready` run carries the provided detail into each ticket verbatim.
+        Uses bulk elaboration (single LLM call) by default to minimize total calls; falls back
+        to sequential elaboration if `pm_bulk_elaborate` is disabled or on bulk failure.
         """
         if not spec.tickets:
             return spec
         cap = getattr(self.settings, "pm_detail_context_chars", 24_000)
         ctx = context[:cap] if cap and len(context) > cap else context
         epic = f"{spec.epic.title}\n{spec.epic.summary}\n{spec.epic.business_goal}"
+
+        if getattr(self.settings, "pm_bulk_elaborate", True):
+            try:
+                tickets_str = "\n".join(
+                    f"- {t.id}: {t.title} ({t.type.value if hasattr(t.type, 'value') else t.type})"
+                    for t in spec.tickets
+                )
+                user = _USER_BULK_ELABORATE.format(context=ctx, epic=epic, tickets=tickets_str)
+                res = await self.generate(
+                    Tickets, system=_SYSTEM_BULK_ELABORATE, user=user, context=ctx
+                )
+
+                # Map back to preserve validated IDs and fill missing details.
+                detailed: list[Ticket] = []
+                res_map = {t.id: t for t in res.tickets}
+                for t in spec.tickets:
+                    rich = res_map.get(t.id)
+                    if not rich:
+                        logger.warning("[pm] bulk elaborate missed ticket %s; keeping thin", t.id)
+                        detailed.append(t)
+                        continue
+
+                    # Force structural fields back to the validated skeleton.
+                    rich.id = t.id
+                    rich.type = t.type
+                    rich.dependencies = t.dependencies
+                    rich.needs_research = t.needs_research
+                    rich.title = t.title or rich.title
+                    detailed.append(repair_ticket_estimates(rich, speedup=self.settings.pm_estimate_speedup))
+
+                spec.tickets = detailed
+                return spec
+            except Exception as exc:  # noqa: BLE001 — bulk is best-effort; fallback to sequential
+                logger.warning("[pm] bulk elaboration failed (%s); falling back to sequential", exc)
 
         detailed: list[Ticket] = []
         for t in spec.tickets:
@@ -401,7 +464,7 @@ class PMAgent(BaseAgent):
             desc=ticket.description,
             feedback=fb,
         )
-        rich = await self.generate(Ticket, system=_SYSTEM_ELABORATE, user=user)
+        rich = await self.generate(Ticket, system=_SYSTEM_ELABORATE, user=user, context=ctx)
         # Force structural fields back to the validated skeleton; keep the richer content.
         rich.id = ticket.id
         rich.type = ticket.type

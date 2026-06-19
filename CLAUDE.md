@@ -30,7 +30,10 @@ client/target #1; SaaS packaging is a later layer that must not change the agent
 4. **Repo topology is per-project**: `fork` / `single` / `closed-source(private)`.
 5. **Sequencing discipline:** do NOT build triggers/sinks/UI until the core loop (Phases 0–3) is
    trustworthy. Keep human verification gates until the layer below has earned removal.
-6. **LangChain/LangGraph-first — religiously.** Prefer maintained LangChain ecosystem primitives over
+7. **Admin Portal**: When creating a new database model, always register it in the admin portal (`src/ash/admin/views.py` and `src/ash/admin/__init__.py`).
+
+## LangChain/LangGraph-first — religiously.
+Prefer maintained LangChain ecosystem primitives over
    hand-rolled code, and model **all orchestration/control-flow with LangGraph**: graph state +
    reducers, nodes, conditional edges, subgraphs, `Send`/map-reduce, and **checkpointer-based
    interrupts/resume** — not bespoke loops, queues, or `if/while` flow in Python. When a requirement

@@ -150,11 +150,13 @@ class Settings(BaseSettings):
     index_progress_every: int = 500
 
     # PM ticket depth (decision #27) — after generating the spec skeleton, run a focused
-    # second pass per ticket so each gets its own output budget and comes out richly detailed
-    # (instead of being compressed to fit one all-in-one structured response). Disable to keep
-    # PM to a single call. `pm_detail_context_chars` caps how much of the source spec is fed
-    # into each per-ticket elaboration call.
+    # second pass to elaborate tickets so they come out richly detailed (instead of being
+    # compressed to fit one all-in-one structured response). `pm_bulk_elaborate` (default True)
+    # uses a single bulk LLM call for all tickets to minimize total calls; if False,
+    # PM makes one call per ticket. Disable `pm_detail_tickets` to skip elaboration entirely.
+    # `pm_detail_context_chars` caps how much of the source spec is fed into the elaboration.
     pm_detail_tickets: bool = True
+    pm_bulk_elaborate: bool = True
     pm_detail_context_chars: int = 24_000
     # LLM I/O capture (decision #30) — persist every agent↔LLM exchange (prompt + response) to the
     # agent_llm_exchanges table for the per-run "LLM I/O" view. Set False to disable (privacy/size).

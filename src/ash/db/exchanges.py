@@ -37,6 +37,8 @@ async def record_exchanges(
                 model=str(ex.get("model", "")),
                 request=ex.get("request", []),
                 response=ex.get("response", {}),
+                context=ex.get("context"),
+                code=ex.get("code"),
                 prompt_tokens=int(ex.get("prompt_tokens", 0)),
                 completion_tokens=int(ex.get("completion_tokens", 0)),
             )

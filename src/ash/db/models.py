@@ -262,6 +262,11 @@ class AgentLLMExchange(Base):
     request: Mapped[list[Any]] = mapped_column(JSON, default=list)  # [{role, content}]
     # {content, tool_calls?, parsed?}
     response: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    # Explicitly extracted primary context (e.g. source requirements/spec/brief)
+    # for easier visibility and grouping in the UI.
+    context: Mapped[str | None] = mapped_column(Text, default=None)
+    # Any specific code snippets sent as primary grounding (not via tools).
+    code: Mapped[str | None] = mapped_column(Text, default=None)
     prompt_tokens: Mapped[int] = mapped_column(Integer, default=0)
     completion_tokens: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

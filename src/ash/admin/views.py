@@ -6,6 +6,7 @@ from sqladmin import ModelView
 
 from ash.db.models import (
     AdminUser,
+    AgentLLMExchange,
     AgentPolicyRecord,
     AgentRunMetric,
     AgentTask,
@@ -184,6 +185,49 @@ class AgentPolicyRecordAdmin(ModelView, model=AgentPolicyRecord):
         AgentPolicyRecord.updated_at,
     ]
     column_searchable_list = [AgentPolicyRecord.project, AgentPolicyRecord.agent_name]
+
+
+class AgentLLMExchangeAdmin(ModelView, model=AgentLLMExchange):
+    name = "LLM Exchange"
+    name_plural = "LLM Exchanges"
+    icon = "fa-solid fa-message"
+    can_create = False
+    can_edit = False
+    column_list = [
+        AgentLLMExchange.id,
+        AgentLLMExchange.run_id,
+        AgentLLMExchange.project,
+        AgentLLMExchange.ticket_id,
+        AgentLLMExchange.agent_name,
+        AgentLLMExchange.phase,
+        AgentLLMExchange.step,
+        AgentLLMExchange.model,
+        AgentLLMExchange.prompt_tokens,
+        AgentLLMExchange.completion_tokens,
+        AgentLLMExchange.created_at,
+    ]
+    column_searchable_list = [
+        AgentLLMExchange.run_id,
+        AgentLLMExchange.project,
+        AgentLLMExchange.ticket_id,
+        AgentLLMExchange.agent_name,
+    ]
+    column_default_sort = [(AgentLLMExchange.created_at, True)]
+    column_details_list = [
+        AgentLLMExchange.id,
+        AgentLLMExchange.run_id,
+        AgentLLMExchange.project,
+        AgentLLMExchange.ticket_id,
+        AgentLLMExchange.agent_name,
+        AgentLLMExchange.phase,
+        AgentLLMExchange.step,
+        AgentLLMExchange.model,
+        AgentLLMExchange.request,
+        AgentLLMExchange.response,
+        AgentLLMExchange.prompt_tokens,
+        AgentLLMExchange.completion_tokens,
+        AgentLLMExchange.created_at,
+    ]
 
 
 class AdminUserAdmin(ModelView, model=AdminUser):

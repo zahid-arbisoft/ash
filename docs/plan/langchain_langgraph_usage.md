@@ -170,7 +170,7 @@ await self._graph.aupdate_state(
 `ainvoke`. For story retries, `as_node="plan_stories"` so `story_router` picks up the reset
 story and routes into `story_build` again.
 
-**PM workbench variants (decision #29):**
+**PM workbench variants:**
 - `Runner.regenerate_spec` seeds a fresh `PMState(feedback=…, regeneration_count=n+1)` and forks
   `as_node="intake"`, then `_drive` re-runs `pm → pm_publish` so the spec is regenerated from the
   reviewer's feedback and re-interrupts at the gate. (It can't reuse `retry_run(from_step="pm")`,

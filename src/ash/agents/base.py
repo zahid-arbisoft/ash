@@ -70,6 +70,8 @@ class BaseAgent(ABC):
         prompt_tokens: int = 0,
         completion_tokens: int = 0,
         step: int = 0,
+        context: str | None = None,
+        code: str | None = None,
     ) -> None:
         """Append one LLM exchange (messages in + response out) to the capture buffer.
 
@@ -85,6 +87,8 @@ class BaseAgent(ABC):
                     "model": self.settings.model_for(self.name).model,
                     "request": _messages_to_records(request),
                     "response": response,
+                    "context": context,
+                    "code": code,
                     "prompt_tokens": int(prompt_tokens),
                     "completion_tokens": int(completion_tokens),
                 }
@@ -196,6 +200,8 @@ class BaseAgent(ABC):
         system: str,
         user: str,
         tools: list[BaseTool] | None = None,
+        context: str | None = None,
+        code: str | None = None,
     ) -> T:
         """Produce a validated `schema` instance.
 
@@ -229,8 +235,10 @@ class BaseAgent(ABC):
         )
         try:
             if resolved_tools:
-                notes = await self._explore(system, user, resolved_tools)
-                result = await self._extract(schema, system=system, user=user, notes=notes)
+                notes = await self._explore(system, user, resolved_tools, context=context, code=code)
+                result = await self._extract(
+                    schema, system=system, user=user, notes=notes, context=context, code=code
+                )
             else:
                 from langchain_core.messages import HumanMessage, SystemMessage
 
@@ -250,7 +258,9 @@ class BaseAgent(ABC):
                 # _extract, which must stay neutral; see _EXTRACT_SYSTEM).
                 messages = [SystemMessage(content=system), HumanMessage(content=user)]
                 t0 = time.monotonic()
-                result = await self._invoke_structured(schema, messages, phase="single_call")
+                result = await self._invoke_structured(
+                    schema, messages, phase="single_call", context=context, code=code
+                )
                 logger.info(
                     "[agent:%s] single-call completed in %.1fs", self.name, time.monotonic() - t0
                 )
@@ -323,7 +333,15 @@ class BaseAgent(ABC):
                 return await self._extract(schema, system=system, user=user, notes=None)
             raise
 
-    async def _explore(self, system: str, user: str, tools: list[BaseTool]) -> str:
+    async def _explore(
+        self,
+        system: str,
+        user: str,
+        tools: list[BaseTool],
+        *,
+        context: str | None = None,
+        code: str | None = None,
+    ) -> str:
         """Phase 1: a hand-rolled tool loop that returns the model's final free text.
 
         We deliberately do NOT use `create_agent` here. Its loop sets `tool_choice="none"`
@@ -384,13 +402,15 @@ class BaseAgent(ABC):
                 step=step + 1,
                 request=msgs,
                 response={
-                    "content": _clip(text),
+                    "content": text,
                     "tool_calls": [
                         {"name": tc.get("name"), "args": tc.get("args")} for tc in tool_calls
                     ],
                 },
                 prompt_tokens=um.get("input_tokens", 0),
                 completion_tokens=um.get("output_tokens", 0),
+                context=context if step == 0 else None,
+                code=code if step == 0 else None,
             )
             if not tool_calls:
                 break
@@ -418,7 +438,14 @@ class BaseAgent(ABC):
         return last_text
 
     async def _extract(
-        self, schema: type[T], *, system: str, user: str, notes: str | None  # noqa: ARG002
+        self,
+        schema: type[T],
+        *,
+        system: str,
+        user: str,
+        notes: str | None,
+        context: str | None = None,
+        code: str | None = None,
     ) -> T:
         """Phase 2 (and the fallback): tool-free structured output via `with_structured_output`.
 
@@ -442,13 +469,6 @@ class BaseAgent(ABC):
         clean_user = clean_user.strip()
 
         if notes:
-            notes_cap: int = getattr(self.settings, "explore_notes_chars", 12_000)
-            if notes_cap > 0 and len(notes) > notes_cap:
-                logger.info(
-                    "[agent:%s] trimming exploration notes %d→%d chars for _extract",
-                    self.name, len(notes), notes_cap,
-                )
-                notes = notes[:notes_cap] + "\n… (notes truncated)"
             human = f"{clean_user}\n\n## Codebase exploration notes\n{notes}"
         else:
             human = clean_user
@@ -460,14 +480,22 @@ class BaseAgent(ABC):
             self.name, chars, est, schema.__name__,
         )
         t0 = time.monotonic()
-        result = await self._invoke_structured(schema, messages, phase="extract")
+        result = await self._invoke_structured(
+            schema, messages, phase="extract", context=context, code=code
+        )
         logger.info(
             "[agent:%s] _extract completed in %.1fs", self.name, time.monotonic() - t0
         )
         return result
 
     async def _invoke_structured(
-        self, schema: type[T], messages: list[Any], *, phase: str = "single_call"
+        self,
+        schema: type[T],
+        messages: list[Any],
+        *,
+        phase: str = "single_call",
+        context: str | None = None,
+        code: str | None = None,
     ) -> T:
         """One tool-free structured call via `with_structured_output`, with usage tracking.
 
@@ -488,15 +516,21 @@ class BaseAgent(ABC):
                 phase=phase,
                 request=messages,
                 response={
-                    "content": _clip(_text_of(getattr(raw_ai, "content", "") or "")),
+                    "content": _text_of(getattr(raw_ai, "content", "") or ""),
                     "parsed": _jsonable(parsed),
                 },
                 prompt_tokens=um.get("input_tokens", 0) + tu.get("prompt_tokens", 0),
                 completion_tokens=um.get("output_tokens", 0) + tu.get("completion_tokens", 0),
+                context=context,
+                code=code,
             )
             return cast(T, parsed)
         self._capture_exchange(
-            phase=phase, request=messages, response={"parsed": _jsonable(raw_result)}
+            phase=phase,
+            request=messages,
+            response={"parsed": _jsonable(raw_result)},
+            context=context,
+            code=code,
         )
         return cast(T, raw_result)
 
@@ -528,17 +562,7 @@ def _prompt_size(messages: Any) -> tuple[int, int]:
 
 
 # ── LLM I/O capture (decision #30) ───────────────────────────────────────────
-# Max chars stored per message/response field — bounds DB row size; longer content is clipped
-# with a marker (we capture for inspection, not replay).
-_EXCHANGE_MAX_CHARS = 16_000
-
 _ROLE_BY_TYPE = {"system": "system", "human": "user", "ai": "assistant", "tool": "tool"}
-
-
-def _clip(text: str) -> str:
-    if len(text) <= _EXCHANGE_MAX_CHARS:
-        return text
-    return text[:_EXCHANGE_MAX_CHARS] + f"\n… (clipped, {len(text)} chars total)"
 
 
 def _messages_to_records(messages: Any) -> list[dict[str, str]]:
@@ -546,7 +570,7 @@ def _messages_to_records(messages: Any) -> list[dict[str, str]]:
     out: list[dict[str, str]] = []
     for m in messages:
         role = _ROLE_BY_TYPE.get(getattr(m, "type", ""), getattr(m, "type", "") or "user")
-        out.append({"role": role, "content": _clip(_text_of(getattr(m, "content", m)))})
+        out.append({"role": role, "content": _text_of(getattr(m, "content", m))})
     return out
 
 
@@ -557,8 +581,8 @@ def _jsonable(value: Any) -> Any:
         try:
             return dump(mode="json")
         except Exception:  # noqa: BLE001
-            return _clip(str(value))
-    return _clip(str(value))
+            return str(value)
+    return str(value)
 
 
 class GuardrailBlockedError(RuntimeError):
