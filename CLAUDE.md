@@ -4,13 +4,25 @@ This file is my own working memory for this project. If I forget how we work, I 
 the plan before doing anything else.
 
 ## Source of truth
-- The plan is **`docs/plan/ash_architecture_and_plan.md`**. It is authoritative. The original source
-  specs live in **`docs/sources/`**.
+- The plan is **`docs/plan/ash_architecture_and_plan.md`**. It is authoritative for architecture
+  decisions. The original source specs live in **`docs/sources/`**. Do NOT modify docs — they are
+  read-only references.
 - **Every decision and every implementation change is recorded in the plan**, and appended to its
   **Changelog (§11)**. The plan never lags the code. Do this in the same turn as the change — don't
   defer it.
 - New decisions also get a row in the plan's "Locked Decisions" table (§7) when they're a choice,
   not just code.
+
+## OpenSpec (spec-driven development)
+We use **[OpenSpec](https://openspec.dev/)** (`openspec/`) as the behavioral spec layer going forward.
+- **`openspec/config.yaml`** — project context and spec rules.
+- **`openspec/specs/<domain>/spec.md`** — behavioral source of truth per domain (observable
+  requirements + scenarios). These mirror the plan but focus on *what* not *how*.
+- **`openspec/changes/<name>/`** — one folder per in-progress change: `proposal.md`, `design.md`,
+  `tasks.md`, and delta `specs/`. Use `/opsx:propose "idea"` to scaffold a new change.
+- **Workflow:** `/opsx:propose` → implement via `/opsx:apply` → `/opsx:archive` merges delta specs.
+- The original `docs/plan/` files are never modified — they remain the architectural reference.
+  OpenSpec specs are the behavioral (requirement) reference.
 
 ## What we're building (one line)
 A **multi-tenant agentic "software house"** (plan §0): agents are the staff (PM/Research/Dev/QA/

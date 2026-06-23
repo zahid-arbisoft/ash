@@ -71,9 +71,39 @@ check: lint typecheck test
 docker-up:
     docker compose up --build
 
+# start the full stack detached
+docker-up-d:
+    docker compose up --build -d
+
+# stop and remove containers (keeps volumes)
 docker-down:
     docker compose down
 
+# stop and remove containers AND volumes (full reset)
+docker-clean:
+    docker compose down -v
+
+# rebuild just the api image without restarting other services
+docker-rebuild:
+    docker compose build api
+
+# restart just the api container (no rebuild)
+docker-restart:
+    docker compose restart api
+
+# tail logs from all services (or pass a service name: just docker-logs api)
+docker-logs service="":
+    docker compose logs -f {{service}}
+
+# open a shell in the running api container
+docker-shell:
+    docker compose exec api bash
+
+# run a one-off command in the api container: just docker-exec "python -m ash.cli list plane"
+docker-exec cmd:
+    docker compose exec api {{cmd}}
+
+# generate a new SECRET_KEY for .env (run once, copy into .env)
 docker-secret-key:
     docker compose exec api python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 

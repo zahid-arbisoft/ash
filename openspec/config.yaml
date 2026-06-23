@@ -1,0 +1,29 @@
+schema: spec-driven
+
+context: |
+  ASH (Agentic Software House) — a multi-tenant agentic SDLC platform.
+  Staff: PM / RFC / Research / Coding / Reviewer / Fixer agents.
+  Clients: humans who set requirements, integrations, and oversight level.
+
+  Tech stack: Python 3.12+, FastAPI, LangGraph, LangChain, PostgreSQL (AsyncPostgresSaver),
+  SQLAlchemy async, Pydantic v2, psycopg3, Jinja2+HTMX+Alpine+Tailwind.
+  Entry: POST /runs; orchestration: LangGraph graph (graph/builder.py).
+  Per-project config: projects/<name>.yaml; secrets encrypted at rest (Fernet).
+
+  Source of truth for architecture and decisions: docs/plan/ash_architecture_and_plan.md
+  OpenSpec specs are the behavioral source of truth for each domain.
+
+rules:
+  specs:
+    - Requirements MUST describe observable, testable behavior — not internal implementation.
+    - Use RFC 2119 keywords (SHALL/MUST/SHOULD/MAY).
+    - Every requirement needs at least one scenario.
+  changes:
+    - Every new feature or bug fix MUST have a proposal before implementation starts.
+    - Design docs are required for changes that touch the graph topology or a new agent.
+    - Tasks MUST be granular enough to complete in one coding session.
+  general:
+    - Engine is generic; projects are data. No hardcoded project names in src/.
+    - Human-in-the-loop is a single-flag toggle (ApprovalGate), never scattered if/else.
+    - Triggers (inputs) and sinks (outputs) are pluggable connectors — not code changes.
+    - All orchestration/control-flow uses LangGraph graphs; no bespoke Python loops.
