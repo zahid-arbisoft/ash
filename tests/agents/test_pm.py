@@ -240,8 +240,9 @@ async def test_pm_elaborates_tickets_with_detail(monkeypatch):
     )
     monkeypatch.setattr("ash.agents.pm.get_board", lambda _dir: _Board())
 
+    # pm_bulk_elaborate=False: bulk path expects Tickets but mock returns a single Ticket.
     agent = PMAgent(
-        Settings(pm_detail_tickets=True, llm_max_tokens=8192),
+        Settings(pm_detail_tickets=True, pm_bulk_elaborate=False, llm_max_tokens=8192),
         model=SeqFakeModel([skeleton, rich]),
     )
     state = WorkflowState(run_id="r1", project="plane", item_id="42")

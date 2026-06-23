@@ -215,6 +215,14 @@ class CodingAgent(BaseAgent):
             if gate.requires_human("merge")
             else "PR open; Reviewer will assess for auto-merge"
         )
+        if test_cmd:
+            from ash.observability import langsmith as _ls
+            _ls.score(
+                state.run_id,
+                "tests_passed",
+                0.0 if test_failure else 1.0,
+                comment=(f"ticket={state.current_story}" if state.current_story else ""),
+            )
         return {
             "coding": {
                 "change": change,

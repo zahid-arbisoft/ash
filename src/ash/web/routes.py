@@ -442,6 +442,8 @@ async def run_approve(
 ) -> HTMLResponse:
     """Approve a spec-review or merge gate. When `stories` are submitted (the spec gate's
     per-story checkboxes), pass them so only those tickets become stories (§4.2)."""
+    from ash.observability import langsmith as _ls
+    _ls.score(run_id, "hitl_decision", 1.0, comment="Approved by user")
     chosen = [s for s in stories if s.strip()]
     decision: Any = {"action": "approve", "stories": chosen} if chosen else "approve"
     return await _decide(request, run_id, decision)
@@ -449,6 +451,8 @@ async def run_approve(
 
 @router.post("/ui/runs/{run_id}/reject", response_class=HTMLResponse)
 async def run_reject(request: Request, run_id: str) -> HTMLResponse:
+    from ash.observability import langsmith as _ls
+    _ls.score(run_id, "hitl_decision", -1.0, comment="Rejected by user")
     return await _decide(request, run_id, "reject")
 
 

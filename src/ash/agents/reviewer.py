@@ -100,6 +100,14 @@ class ReviewerAgent(BaseAgent):
         else:
             notes.append("changes requested — Fixer will address findings")
 
+        from ash.observability import langsmith as _ls
+        _ls.score(
+            state.run_id,
+            "reviewer_verdict",
+            1.0 if review.verdict is ReviewVerdict.approve else 0.0,
+            comment=f"{verdict} | findings={len(review.findings)} blocking={len(blocking)}"
+            + (f" | ticket={state.current_story}" if state.current_story else ""),
+        )
         return {
             "reviewer": {
                 "review": review,
