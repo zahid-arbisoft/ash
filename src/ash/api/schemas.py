@@ -41,6 +41,6 @@ class RunStatus(BaseModel):
     status: str
     pm: dict[str, Any]
     research: dict[str, Any]
-    coding: dict[str, Any]
+    dev: dict[str, Any]
     reviewer: dict[str, Any]
     fixer: dict[str, Any]

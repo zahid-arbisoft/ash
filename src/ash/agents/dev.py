@@ -1,4 +1,4 @@
-"""Dev / Coding agent (write) — turns the plan into real file edits, commits, pushes, opens a PR.
+"""Dev agent (write) — turns the plan into real file edits, commits, pushes, opens a PR.
 
 Architecture (A1 / P2 — bounded create_agent tool loop):
 - Detects the repo's test command, commit convention, PR template, and project skills before coding.
@@ -60,22 +60,34 @@ A previous implementation attempt failed the test suite. Your job:
 5. Return a `CodeChange` with the FULL corrected content for each file you change."""
 
 
-class CodingAgent(BaseAgent):
-    name = "coding"
+class DevAgent(BaseAgent):
+    name = "dev"
 
     async def run(self, state: WorkflowState) -> dict[str, Any]:
         self._reset_usage()
+        # Idempotency: if dev already produced code (no error) and the user hasn't asked for a
+        # re-run (no feedback/custom_prompt), pass through so retrigger-reviewer doesn't re-run dev.
+        if state.dev.change and not state.dev.error and not state.dev.feedback and not self._extra_instructions(state):
+            logger.info("[dev] already has output, passing through (retrigger of later step)")
+            return {}
         skip = await self._trigger_gate(state)
         if skip is not None:
             return skip
 
         brief = state.brief(max_chars=self.settings.brief_max_chars)
         if not brief:
-            return {"coding": {"note": "skipped: nothing to build (no spec or issue)"}}
+            logger.warning("[dev] skipped: no spec or issue to work from (brief is empty)")
+            return {"dev": {"note": "skipped: nothing to build (no spec or issue)"}}
+
+        # Dev workbench HITL: human feedback to apply on this pass (consumed once, then cleared).
+        human_feedback = (state.dev.feedback or "").strip()
+        # Optional custom prompt: run-wide instruction + per-agent re-trigger (decision #33).
+        custom_prompt = self._extra_instructions(state)
 
         project = load_project(state.project)
         if project.work is None:
-            return {"coding": {"note": "skipped: project has no work target"}}
+            logger.warning("[dev] skipped: project %r has no work target (set work.local_repo_path / LOCAL_REPO_PATH)", state.project)
+            return {"dev": {"note": "skipped: project has no work target"}}
         work = project.work
 
         # Research is optional. If it ran, reuse its plan + worktree; if it was disabled or
@@ -88,14 +100,15 @@ class CodingAgent(BaseAgent):
         else:
             setup = await ensure_worktree(project, state, github_token=self.settings.github_token)
             if setup is None:
+                logger.warning("[dev] skipped: no local clone — set work.local_repo_path / LOCAL_REPO_PATH for project %r", state.project)
                 return {
-                    "coding": {
+                    "dev": {
                         "note": "skipped: no local clone available "
                         "(configure work.local_repo_path / LOCAL_REPO_PATH for this project)"
                     }
                 }
             wt_path, branch = setup
-            logger.info("[coding] research absent — set up own worktree at %s", wt_path)
+            logger.info("[dev] research absent — set up own worktree at %s", wt_path)
         ws = RepoWorkspace(work, project.runtime_dir / "worktrees",
                            github_token=self.settings.github_token)
 
@@ -105,7 +118,7 @@ class CodingAgent(BaseAgent):
         pr_template = await asyncio.to_thread(code_intel.read_pr_template, wt_path)
         skills_context = _load_skills(project)
         logger.info(
-            "[coding] context: test_cmd=%s convention=%s skills=%s",
+            "[dev] context: test_cmd=%s convention=%s skills=%s",
             test_cmd,
             commit_convention[:40],
             bool(skills_context),
@@ -117,7 +130,7 @@ class CodingAgent(BaseAgent):
         written: list[str] = []
 
         for iteration in range(MAX_CODE_ITERATIONS):
-            logger.info("[coding] iteration %d/%d", iteration + 1, MAX_CODE_ITERATIONS)
+            logger.info("[dev] iteration %d/%d", iteration + 1, MAX_CODE_ITERATIONS)
             is_fix = test_failure is not None
             change = await self._code(
                 wt_path,
@@ -127,44 +140,59 @@ class CodingAgent(BaseAgent):
                 test_cmd=test_cmd,
                 test_failure=test_failure,
                 is_fix_pass=is_fix,
+                human_feedback=human_feedback,
+                custom_prompt=custom_prompt,
             )
 
             if not change.edits:
-                logger.info("[coding] no edits produced on iteration %d", iteration + 1)
+                logger.info("[dev] no edits produced on iteration %d", iteration + 1)
                 break
 
             written = await asyncio.to_thread(apply_change, wt_path, change)
-            logger.info("[coding] wrote %d files: %s", len(written), written)
+            logger.info("[dev] wrote %d files: %s", len(written), written)
 
             if not test_cmd:
-                logger.info("[coding] no test command detected — skipping test gate")
+                logger.info("[dev] no test command detected — skipping test gate")
                 break
 
             exit_code, test_out = await asyncio.to_thread(
                 _run_in_worktree, test_cmd, wt_path
             )
-            logger.info("[coding] tests exit=%d", exit_code)
+            logger.info("[dev] tests exit=%d", exit_code)
             if exit_code == 0:
-                logger.info("[coding] tests green — done")
+                logger.info("[dev] tests green — done")
                 test_failure = None
                 break
             if iteration + 1 < MAX_CODE_ITERATIONS:
-                logger.warning("[coding] tests failed; will attempt fix (iter %d)", iteration + 2)
+                logger.warning("[dev] tests failed; will attempt fix (iter %d)", iteration + 2)
                 test_failure = test_out
             else:
                 logger.warning(
-                    "[coding] tests still failing after %d iterations", MAX_CODE_ITERATIONS
+                    "[dev] tests still failing after %d iterations", MAX_CODE_ITERATIONS
                 )
                 # Proceed anyway — Reviewer will flag it
                 test_failure = test_out
 
         if not written or change is None or not change.edits:
+            # No code was produced → no PR can be opened. Treat this as a step FAILURE (not a
+            # benign note) so the story is marked failed, the cockpit shows Dev red with a reason,
+            # and the downstream Reviewer/Fixer self-skip instead of running on an empty change
+            # (decision #33 follow-up).
+            reason = (
+                "Dev produced no code edits, so no PR was opened. The model returned an empty "
+                "change set"
+                + (f" (summary: {change.summary})" if change and change.summary else "")
+                + ". Re-trigger Dev with a custom prompt or refine with feedback to retry."
+            )
+            logger.warning("[dev] %s", reason)
             return {
-                "coding": {
+                "dev": {
                     "change": change,
                     "worktree_path": str(wt_path),
                     "branch": branch,
+                    "error": reason,
                     "note": "no edits produced; needs human",
+                    "feedback": None,  # consumed this pass
                 }
             }
 
@@ -187,12 +215,15 @@ class CodingAgent(BaseAgent):
         # retry), update it in place instead of opening a new one. The branch is deterministic
         # per ticket, so even a fresh create_pr would de-dupe — but reusing the known URL avoids
         # a redundant POST and keeps the same PR across regenerations.
-        existing_pr = state.coding.pr_url
+        # Combined-PR strategy (F7): every story shares the run-level PR, so reuse the run-level URL
+        # (the first story opens it; the rest stack commits + update the same PR).
+        combined = state.pr_strategy == "single"
+        existing_pr = (state.combined_pr_url or state.dev.pr_url) if combined else state.dev.pr_url
         title_prefix = f"#{state.item_id}: " if prefix else ""
         if existing_pr:
             await asyncio.to_thread(pr_client.edit_pr_body, pr=existing_pr, body=body)
             pr_url = existing_pr
-            logger.info("[coding] updated existing PR for story (no duplicate): %s", pr_url)
+            logger.info("[dev] updated existing PR for story (no duplicate): %s", pr_url)
         else:
             pr_url = await asyncio.to_thread(
                 create_pr,
@@ -223,8 +254,8 @@ class CodingAgent(BaseAgent):
                 0.0 if test_failure else 1.0,
                 comment=(f"ticket={state.current_story}" if state.current_story else ""),
             )
-        return {
-            "coding": {
+        result: dict[str, Any] = {
+            "dev": {
                 "change": change,
                 "files_written": written,
                 "pr_url": pr_url,
@@ -232,8 +263,17 @@ class CodingAgent(BaseAgent):
                 "branch": branch,
                 "note": f"{note} | tests: {tests_status}",
                 "tokens": dict(self._usage),
+                "feedback": None,  # consumed this pass
             }
         }
+        # Persist the shared identity at RUN level so the next story stacks onto the same
+        # branch/worktree and updates this PR rather than opening its own (F7). The node adapter
+        # passes these top-level keys through despite this being a story-scoped agent.
+        if combined:
+            result["combined_branch"] = branch
+            result["combined_worktree"] = str(wt_path)
+            result["combined_pr_url"] = pr_url
+        return result
 
     async def _code(
         self,
@@ -245,6 +285,8 @@ class CodingAgent(BaseAgent):
         test_cmd: str | None,
         test_failure: str | None,
         is_fix_pass: bool,
+        human_feedback: str = "",
+        custom_prompt: str = "",
     ) -> CodeChange:
         toolkit = DevToolkit(worktree=worktree, allowed_cmd=test_cmd)
         skills_section = (
@@ -256,6 +298,20 @@ class CodingAgent(BaseAgent):
             "\n\n## Test failure to fix\n```\n" + test_failure[:3000] + "\n```"
             if is_fix_pass and test_failure
             else ""
+        )
+        # Dev workbench HITL (Dev): reviewer/human feedback on the PREVIOUS attempt that this
+        # pass MUST address — placed prominently so the model prioritises it.
+        feedback_section = (
+            "\n\n## Human feedback you MUST address\n"
+            "A reviewer asked for the following changes to your previous implementation. "
+            "Apply this feedback directly while keeping what was already correct:\n"
+            f"{human_feedback}"
+            if human_feedback
+            else ""
+        )
+        # Optional custom prompt from a cockpit re-trigger (decision #33), consumed once.
+        custom_section = (
+            f"\n\n## Additional instructions\n{custom_prompt}" if custom_prompt else ""
         )
         # The plan is optional: present when Research ran, absent when it's disabled/skipped —
         # in which case the agent plans as it goes using the exploration tools.
@@ -271,13 +327,29 @@ class CodingAgent(BaseAgent):
             f"## Work brief\n{brief}"
             f"{plan_section}\n\n"
             "Use read_file and list_files to inspect the current code before making changes."
+            f"{custom_section}"
+            f"{feedback_section}"
             f"{failure_section}"
             f"{skills_section}"
             f"{test_section}\n\n"
             "Use the tools to read files, run tests to verify, "
             "then return the CodeChange with full file contents."
         )
-        return await self.generate(CodeChange, system=system, user=user, tools=toolkit.get_tools())
+        # Code-to-LLM observability (decision #33): record the brief as `context` and the
+        # plan/failure grounding as `code` so the I/O page shows what code-related content was
+        # sent and its token size. (File contents read mid-loop also appear in the request.)
+        code_grounding = (
+            (plan.model_dump_json(indent=2) if plan is not None else "")
+            + (("\n\n# Test failure\n" + test_failure[:3000]) if test_failure else "")
+        ).strip() or None
+        return await self.generate(
+            CodeChange,
+            system=system,
+            user=user,
+            tools=toolkit.get_tools(),
+            context=brief,
+            code=code_grounding,
+        )
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -286,7 +358,7 @@ class CodingAgent(BaseAgent):
 def apply_change(worktree: Path, change: CodeChange) -> list[str]:
     """Write edits into the worktree (sandboxed). Returns the written paths.
 
-    Public — shared by the Coding and Fixer agents.
+    Public — shared by the Dev and Fixer agents.
     """
     written: list[str] = []
     root = worktree.resolve()

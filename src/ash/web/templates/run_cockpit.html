@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}Run {{ run_id[:8] }}{% endblock %}
+{% block breadcrumb %}<a href="/ui/runs" class="hover:text-fg">Runs</a> / {{ run_id[:8] }}{% endblock %}
+{% block body %}
+{%- set status = state.get("status", "running") -%}
+
+<div x-data="{ stage: '{{ selected }}' }">
+  {# ── header ── #}
+  <div class="flex flex-wrap items-center gap-3 justify-between mb-4">
+    <div>
+      <h1 class="text-xl font-semibold">Run
+        <span class="font-mono text-base text-muted">{{ run_id[:12] }}</span></h1>
+      <p class="text-sm text-muted mt-0.5">
+        {{ state.get("project", "") }} · {{ state.get("item_id", "") }} ·
+        <span class="text-fg">{{ state.get("story_mode", "single") }} story mode</span>
+        {% if state.get("intake_mode") %}· {{ state.get("intake_mode") }}{% endif %}
+        {% if state.get("workflow_snapshot", {}).get("name") %}· workflow <span class="text-fg">{{ state.workflow_snapshot.name }}</span>{% if state.workflow_snapshot.get("story_execution") and state.workflow_snapshot.story_execution != "all" %} <span class="text-muted">({{ state.workflow_snapshot.story_execution.replace("_"," ") }})</span>{% endif %}{% endif %}
+      </p>
+    </div>
+    <div class="flex items-center gap-3 text-sm">
+      <a href="/ui/run/{{ run_id }}/io" class="text-accent hover:underline">LLM I/O →</a>
+      {% if state.get("pm") and state.pm.get("spec") %}
+      <a href="/ui/run/{{ run_id }}/pm" class="text-muted hover:text-fg hover:underline">Spec</a>
+      {% endif %}
+    </div>
+  </div>
+
+  {# body streams while a stage runs; the rail + selected panel are re-rendered each tick #}
+  <div id="cockpit-body"
+       {% if live_stream %}hx-ext="sse"
+       sse-connect="/ui/run/{{ run_id }}/events?stage={{ selected }}&story={{ selected_story }}"
+       sse-swap="message" sse-close="done"{% endif %}>
+    {% include "_cockpit_body.html" %}
+  </div>
+</div>
+{% endblock %}

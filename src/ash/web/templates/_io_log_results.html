@@ -1,0 +1,145 @@
+{# I/O log results: token/time summary + in-flight banner + grouped, collapsible exchange rows.
+   Clicking a row opens a Datadog-style slide-out drawer with the full call. Context: groups (each:
+   agent_label, ticket_id, run_id, exchanges, prompt, completion, duration_ms), total, tot_prompt,
+   tot_completion, tot_duration, in_flight, scoped, run_id. #}
+{%- set phase_tone = {
+  "single_call":"bg-accent/15 text-accent","explore":"bg-warn/15 text-warn",
+  "extract":"bg-ok/15 text-ok","refine":"bg-accent/15 text-accent"} -%}
+
+<div x-data="{ open:false, ex:{}, allOpen:true }" @keydown.escape.window="open=false">
+  {# ── overall summary + expand/collapse-all ── #}
+  <div class="flex items-center gap-4 mb-3 text-xs text-muted flex-wrap">
+    <span><span class="text-fg font-mono tabular-nums">{{ total }}</span> exchange(s)</span>
+    <span title="total prompt tokens">↑ <span class="text-fg font-mono tabular-nums">{{ "{:,}".format(tot_prompt) }}</span></span>
+    <span title="total completion tokens">↓ <span class="text-fg font-mono tabular-nums">{{ "{:,}".format(tot_completion) }}</span></span>
+    {% if tot_duration %}<span title="total agent wall-clock (this run)">⏱ <span class="text-fg font-mono tabular-nums">{{ "%.1f"|format(tot_duration/1000) }}s</span></span>{% endif %}
+    {% if groups %}
+    <button type="button"
+            @click="allOpen = !allOpen; $root.querySelectorAll('details.io-grp').forEach(d => d.open = allOpen)"
+            class="ml-auto text-[11px] px-2 h-6 rounded-md border border-border text-muted hover:text-fg hover:border-accent/50">
+      <span x-text="allOpen ? 'Collapse all' : 'Expand all'"></span>
+    </button>
+    {% endif %}
+  </div>
+
+  {# ── in-flight (response pending) — long-running calls with no persisted exchange yet ── #}
+  {% if in_flight %}
+  <div class="mb-3 border border-warn/30 bg-warn/5 rounded-lg px-4 py-2.5 text-xs text-warn flex items-center gap-2 flex-wrap">
+    <span class="inline-block w-2 h-2 rounded-full bg-warn animate-pulse"></span>
+    <span class="font-semibold">In flight — response pending:</span>
+    {% for f in in_flight %}
+    <span class="px-2 py-0.5 rounded bg-warn/10">{{ f.label }}{% if f.ticket %} · <span class="font-mono">{{ f.ticket }}</span>{% endif %}</span>
+    {% endfor %}
+    <span class="text-muted/80">(the exchange appears here once the call returns)</span>
+  </div>
+  {% endif %}
+
+  {% if not groups %}
+  <div class="bg-surface border border-border rounded-xl px-5 py-12 text-center text-sm text-muted">
+    No exchanges match these filters.
+  </div>
+  {% endif %}
+
+  <div class="space-y-4">
+  {% for g in groups %}
+    <details open class="io-grp bg-surface border border-border rounded-xl overflow-hidden">
+      <summary class="px-4 py-2.5 border-b border-border flex items-center gap-2 text-sm cursor-pointer list-none">
+        <span class="text-muted/60">▸</span>
+        <span class="font-semibold">{{ g.agent_label or g.agent_name }}</span>
+        {% if g.ticket_id %}<span class="text-muted">· story <span class="font-mono">{{ g.ticket_id }}</span></span>{% endif %}
+        {% if not scoped %}<a href="/ui/run/{{ g.run_id }}" class="text-muted hover:text-accent font-mono text-xs" @click.stop>{{ g.run_id[:8] }}</a>{% endif %}
+        <span class="ml-auto flex items-center gap-3 text-xs text-muted font-mono tabular-nums">
+          <span title="prompt → completion tokens (this section)">🪙 {{ "{:,}".format(g.prompt or 0) }}→{{ "{:,}".format(g.completion or 0) }}</span>
+          {% if g.duration_ms %}<span title="wall-clock for this section">⏱ {{ "%.1f"|format(g.duration_ms/1000) }}s</span>{% endif %}
+          <span>{{ g.exchanges|length }} call(s)</span>
+        </span>
+      </summary>
+      <div class="divide-y divide-border">
+        {% for ex in g.exchanges %}
+        {%- set code_len = (ex.code | length) if ex.code else 0 -%}
+        {%- set ex_json = {
+          "phase": ex.phase, "step": ex.step, "model": ex.model,
+          "prompt_tokens": ex.prompt_tokens or 0, "completion_tokens": ex.completion_tokens or 0,
+          "context": ex.context, "code": ex.code, "code_len": code_len,
+          "context_len": (ex.context | length) if ex.context else 0,
+          "request": ex.request or [], "response": ex.response or {},
+          "agent": g.agent_label or g.agent_name, "ticket": g.ticket_id,
+        } -%}
+        <button type="button" data-ex='{{ ex_json|tojson }}'
+                @click="ex = JSON.parse($el.dataset.ex); open = true"
+                class="w-full text-left px-4 py-2.5 flex items-center gap-2 text-xs hover:bg-elevate/40">
+          <span class="px-1.5 py-0.5 rounded {{ phase_tone.get(ex.phase, 'bg-border/60 text-muted') }}">{{ ex.phase }}{% if ex.step %} {{ ex.step }}{% endif %}</span>
+          <span class="font-mono text-muted">{{ ex.model }}</span>
+          <span class="ml-auto font-mono tabular-nums text-muted" title="prompt → completion tokens">
+            {{ "{:,}".format(ex.prompt_tokens or 0) }}→{{ "{:,}".format(ex.completion_tokens or 0) }}
+          </span>
+          {% if code_len %}<span class="text-[10px] px-1.5 rounded bg-warn/15 text-warn" title="code chars sent">code {{ "{:,}".format(code_len) }}c</span>{% endif %}
+          <span class="text-muted/60">›</span>
+        </button>
+        {% endfor %}
+      </div>
+    </details>
+  {% endfor %}
+  </div>
+
+  {# ── slide-out detail drawer (Datadog-style) ── #}
+  <div x-show="open" x-cloak class="fixed inset-0 z-40" style="display:none">
+    <div class="absolute inset-0 bg-black/40" @click="open=false"></div>
+    <div class="absolute right-0 top-0 h-full w-full max-w-2xl bg-surface border-l border-border shadow-2xl overflow-y-auto"
+         x-transition:enter="transition ease-out duration-150" x-transition:enter-start="translate-x-full" x-transition:enter-end="translate-x-0">
+      <div class="sticky top-0 bg-surface/95 backdrop-blur border-b border-border px-5 py-3 flex items-center gap-2">
+        <span class="font-semibold text-sm" x-text="ex.agent"></span>
+        <span class="text-xs text-muted" x-show="ex.ticket">· story <span class="font-mono" x-text="ex.ticket"></span></span>
+        <span class="text-[11px] px-1.5 py-0.5 rounded bg-elevate text-muted" x-text="ex.phase + (ex.step ? ' ' + ex.step : '')"></span>
+        <button @click="open=false" class="ml-auto text-muted hover:text-fg text-lg leading-none">✕</button>
+      </div>
+      <div class="p-5 space-y-4 text-xs">
+        {# token + size strip #}
+        <div class="flex flex-wrap gap-2">
+          <span class="px-2 py-0.5 rounded bg-elevate text-muted font-mono" x-text="'model: ' + ex.model"></span>
+          <span class="px-2 py-0.5 rounded bg-elevate text-muted" x-text="'prompt ' + (ex.prompt_tokens||0).toLocaleString() + ' tok'"></span>
+          <span class="px-2 py-0.5 rounded bg-elevate text-muted" x-text="'completion ' + (ex.completion_tokens||0).toLocaleString() + ' tok'"></span>
+          <template x-if="ex.context_len"><span class="px-2 py-0.5 rounded bg-elevate text-muted" x-text="'context ' + ex.context_len.toLocaleString() + ' chars'"></span></template>
+          <template x-if="ex.code_len"><span class="px-2 py-0.5 rounded bg-warn/10 text-warn" x-text="'code ' + ex.code_len.toLocaleString() + ' chars'"></span></template>
+        </div>
+
+        <template x-if="ex.context">
+          <div>
+            <div class="text-[11px] uppercase tracking-wide text-muted mb-1">Context sent (brief / spec)</div>
+            <pre class="bg-bg border border-border rounded p-2 max-h-56 overflow-auto whitespace-pre-wrap" x-text="ex.context"></pre>
+          </div>
+        </template>
+
+        <template x-if="ex.code">
+          <div>
+            <div class="text-[11px] uppercase tracking-wide text-warn mb-1">Code sent to the model</div>
+            <pre class="bg-bg border border-warn/30 rounded p-2 max-h-72 overflow-auto whitespace-pre-wrap" x-text="ex.code"></pre>
+          </div>
+        </template>
+
+        <div>
+          <div class="text-[11px] uppercase tracking-wide text-muted mb-1">Sent messages</div>
+          <template x-for="(m, i) in (ex.request || [])" :key="i">
+            <div class="mb-1">
+              <span class="text-[10px] px-1.5 rounded bg-elevate text-muted" x-text="m.role"></span>
+              <pre class="bg-bg border border-border rounded p-2 mt-0.5 max-h-56 overflow-auto whitespace-pre-wrap" x-text="m.content"></pre>
+            </div>
+          </template>
+        </div>
+
+        <div>
+          <div class="text-[11px] uppercase tracking-wide text-muted mb-1">Received</div>
+          <template x-if="ex.response && ex.response.content">
+            <pre class="bg-bg border border-border rounded p-2 max-h-56 overflow-auto whitespace-pre-wrap" x-text="ex.response.content"></pre>
+          </template>
+          <template x-if="ex.response && ex.response.tool_calls">
+            <pre class="bg-bg border border-border rounded p-2 max-h-56 overflow-auto whitespace-pre-wrap" x-text="JSON.stringify(ex.response.tool_calls, null, 2)"></pre>
+          </template>
+          <template x-if="ex.response && ex.response.parsed">
+            <pre class="bg-bg border border-border rounded p-2 max-h-72 overflow-auto whitespace-pre-wrap" x-text="JSON.stringify(ex.response.parsed, null, 2)"></pre>
+          </template>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>

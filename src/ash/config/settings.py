@@ -16,7 +16,7 @@ import yaml
 from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-AgentName = str  # "pm" | "research" | "coding" | "reviewer" | "fixer"
+AgentName = str  # "pm" | "research" | "dev" | "reviewer" | "fixer"
 
 
 def _find_repo_root() -> Path:
@@ -123,31 +123,12 @@ class Settings(BaseSettings):
     # per-agent overrides (nested: AGENT_PM__MODEL, AGENT_REVIEWER__PROVIDER, …)
     agent_pm: AgentModelOverride = Field(default_factory=AgentModelOverride)
     agent_research: AgentModelOverride = Field(default_factory=AgentModelOverride)
-    agent_coding: AgentModelOverride = Field(default_factory=AgentModelOverride)
+    # Per-agent model override (env: AGENT_DEV__MODEL, …). Renamed from agent_coding (decision #33).
+    agent_dev: AgentModelOverride = Field(default_factory=AgentModelOverride)
     agent_reviewer: AgentModelOverride = Field(default_factory=AgentModelOverride)
     agent_fixer: AgentModelOverride = Field(default_factory=AgentModelOverride)
     agent_rfc: AgentModelOverride = Field(default_factory=AgentModelOverride)
 
-    # vector store (Chroma)
-    chroma_host: str = "localhost"
-    chroma_port: int = 8001
-
-    # Context minimization (decision #26 / F7) — send only what's needed to the LLM.
-    #   CHUNK_MAX_CHARS   — code is indexed as chunks of ~this size (with line ranges), not whole
-    #                       files, so semantic search returns the relevant span, not a file head.
-    #   CHUNK_OVERLAP     — overlap between adjacent chunks to avoid splitting context mid-symbol.
-    #   SEARCH_SNIPPET_CHARS — max chars returned per search hit (was a fixed 800).
-    chunk_max_chars: int = 1_400
-    chunk_overlap: int = 160
-    search_snippet_chars: int = 900
-    # Semantic-index guardrails (decision #26 / F7) — keep Research from blocking on a huge repo.
-    #   INDEX_MAX_FILES   — above this many indexable files, SKIP local embedding and use the
-    #                       grep-based fallback search instead (0 = no cap; index everything).
-    #                       Large monorepos (e.g. edx-platform) embed slowly client-side, so the
-    #                       agent would sit in "indexing…" for minutes before its first LLM call.
-    #   INDEX_PROGRESS_EVERY — log indexing progress every N files so it never looks hung.
-    index_max_files: int = 1_500
-    index_progress_every: int = 500
 
     # PM ticket depth (decision #27) — after generating the spec skeleton, run a focused
     # second pass to elaborate tickets so they come out richly detailed (instead of being
@@ -240,9 +221,10 @@ class AgentPolicy(BaseModel):
     `manual` = human must click Trigger in the UI. Orthogonal to `Autonomy` (which gates
     dangerous mid-loop steps like merge/push).
 
-    Default is **`manual`** for every agent except PM (see `DEFAULT_AUTO_TRIGGER_AGENTS` /
-    `ProjectConfig.agent_policy`): PM runs automatically to produce the spec, then each downstream
-    agent waits for an explicit human Trigger unless a project/DB override opts it into `auto`.
+    Default is **`manual`** for every agent (decision #33; see `DEFAULT_AUTO_TRIGGER_AGENTS` /
+    `ProjectConfig.agent_policy`): a run pauses at each agent until the client clicks Trigger in the
+    cockpit, unless a project/DB override opts that agent into `auto`. (Intake is exempt — it is a
+    no-LLM fetch step and never gates.)
 
     Dispatch limits:
       `concurrency_limit` — max simultaneous in_progress tasks for this agent.
@@ -264,15 +246,17 @@ class AgentPolicy(BaseModel):
 KNOWN_AGENTS: tuple[str, ...] = (
     "pm",
     "research",
-    "coding",
+    "dev",
     "reviewer",
     "fixer",
     "rfc",
 )
 
-# Agents that default to `auto` trigger (run without a manual click). Only PM — it must produce
-# the spec automatically; everything downstream defaults to `manual` so a human gates each step.
-DEFAULT_AUTO_TRIGGER_AGENTS: frozenset[str] = frozenset({"pm"})
+# Agents that default to `auto` trigger (run without a manual click). EMPTY by default
+# (decision #33): every agent — PM included — is manual unless a project/DB policy opts it into
+# `auto`, so the client drives a run agent-by-agent from the cockpit. (Intake never gates — it is
+# a no-LLM fetch step that runs automatically regardless.)
+DEFAULT_AUTO_TRIGGER_AGENTS: frozenset[str] = frozenset()
 
 
 class Budget(BaseModel):
@@ -289,7 +273,7 @@ class ProjectConfig(BaseModel):
     budget: Budget = Field(default_factory=Budget)
     # where the Research agent publishes its doc: file (default) | comment (source issue) | none
     research_sink: Literal["file", "comment", "none"] = "file"
-    # per-agent trigger/enabled policy, keyed by agent name (pm/research/coding/reviewer/fixer/rfc)
+    # per-agent trigger/enabled policy, keyed by agent name (pm/research/dev/reviewer/fixer/rfc)
     agents: dict[str, AgentPolicy] = Field(default_factory=dict)
     schedule: dict[str, Any] = Field(default_factory=dict)
     skills: str | None = None
@@ -300,7 +284,7 @@ class ProjectConfig(BaseModel):
 
     def agent_policy(self, name: str) -> AgentPolicy:
         """The policy for an agent. Explicit YAML entry wins; otherwise the default is
-        `manual` trigger for every agent except those in `DEFAULT_AUTO_TRIGGER_AGENTS` (PM)."""
+        `manual` trigger for every agent (DEFAULT_AUTO_TRIGGER_AGENTS is empty — decision #33)."""
         if name in self.agents:
             return self.agents[name]
         if name in DEFAULT_AUTO_TRIGGER_AGENTS:

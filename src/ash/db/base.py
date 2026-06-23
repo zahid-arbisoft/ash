@@ -69,6 +69,12 @@ _PG_COLUMN_BACKFILLS: tuple[str, ...] = (
     "ALTER TABLE run_records ADD COLUMN IF NOT EXISTS story_mode VARCHAR(20) "
     "NOT NULL DEFAULT 'single'",
     "ALTER TABLE run_records ADD COLUMN IF NOT EXISTS pm_only BOOLEAN NOT NULL DEFAULT FALSE",
+    # F7: how a multi-story run packages PRs (per_story | single).
+    "ALTER TABLE run_records ADD COLUMN IF NOT EXISTS pr_strategy VARCHAR(20) "
+    "NOT NULL DEFAULT 'per_story'",
+    # workflow-builder: the workflow a run executed with + an immutable snapshot of its steps.
+    "ALTER TABLE run_records ADD COLUMN IF NOT EXISTS workflow_id INTEGER",
+    "ALTER TABLE run_records ADD COLUMN IF NOT EXISTS workflow_snapshot JSON",
     # decision #26: per-story task scoping (agent_tasks predates the ticket_id column).
     "ALTER TABLE agent_tasks ADD COLUMN IF NOT EXISTS ticket_id VARCHAR(120) "
     "NOT NULL DEFAULT ''",

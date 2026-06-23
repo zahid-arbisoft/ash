@@ -352,6 +352,8 @@ A further evolution is a **self-running "harness" mode** modelled directly on Cl
 | 32 | **Optimized PM LLM calls via bulk elaboration** | Introduced `pm_bulk_elaborate` to process all tickets in a single 'bulk' elaboration pass instead of one call per ticket. Reduces LLM call overhead significantly (e.g. 10 calls → 2) while maintaining or improving quality. Added `Tickets` wrapper schema and updated `PMAgent._elaborate_tickets` with a robust fallback to sequential mode. Improved initial breakdown quality in `_SYSTEM_RAW_TO_SPEC`. |
 | 26 | **Story = unit of execution; per-story fan-out, retry & regenerate inside one run (LangGraph-first)** | Supersedes #25's "one run = one ticket". The build phase becomes a **per-story subgraph keyed by `ticket_id`** inside a single run: `WorkflowState.stories: dict[ticket_id, StoryState]` (reducer-merged) + `story_order` + a sequential `story_router`→`story_build` loop. Stories run **one by one** in dependency order; each gets its **own PR** (deterministic branch `ash/<run>/<ticket_id>`, persisted `branch`/`pr_url` → Coding/Fixer **update, never duplicate**). PM gains a **single (default) / multiple** stories toggle. **Retry is per-story** (`retry_run(ticket_id, from_step)` re-enters the router → resumes at the failed story, skips completed ones); **manual per-story regenerate** (re-research / regenerate-PR / re-review / re-fix) uses the same fork. RFC is **always one per run**. UI: per-story timeline cards + per-PR progress + top-right PR link/dropdown; RFC Markdown preview + `hx-preserve` collapse fix. Full design: **`docs/plan/per_story_fanout_and_oversight_plan.md`**. |
 | 28 | **Deployment topology = B1 (cloud control plane + local runner daemon)** | Code must never leave the on-prem boundary (data-residency; large repo cost/latency). Cloud runs the control plane (FastAPI + LangGraph + Postgres + UI/Approvals + PM/RFC agents). On-prem runs the **runner daemon** (filesystem access, worktrees, Chroma indexing, git push). Runner dials out to control plane (no inbound AWS ports); only extracted code snippets reach the LLM vendor. B2 (GitHub Actions) rejected: designed for CI, not interactive HITL agent loops. **Gated on Alembic migrations** (remove `_PG_COLUMN_BACKFILLS` stopgap) before runner seam work starts. Full analysis + retrieval quality roadmap + Deep Agents placement: **`docs/plan/deployment_topology_and_code_extraction_plan.md`**. |
+| 34 | **Workflows = reusable, versioned agent flows (subset + trigger, snapshot-on-execute)** | A `Workflow` (DB table, `db/workflows.py` CRUD, `WorkflowAdmin`) is an ordered list of `{agent, trigger, enabled}` steps + a `story_execution` hint + `is_default`/`disabled`/`version`. v1 (OD1) is **subset + per-agent trigger only**: a workflow sets each agent's enable/trigger; **execution stays in the canonical pipeline order** (true reordering deferred — needs graph restructuring). Resolution precedence is **AgentPolicyRecord (Agents page) > run's workflow snapshot > YAML > code default** (`BaseAgent._resolve_policy`), so the Agents page always overrides the workflow. A run **snapshots** the chosen (or default) workflow at start (`WorkflowState.workflow_snapshot` + `RunRecord.workflow_id`/`workflow_snapshot`) so editing a workflow only affects **new** runs; the cockpit renders each run against its snapshot (workflow-disabled agents show `skipped`). Workflows are **soft-deleted** (disabled → excluded from the run dropdown, still readable for history) and exactly one may be **default** (pre-selected on the run form). Builder at `/ui/workflows`: create/edit/clone/disable + per-agent enable+trigger controls (no-JS-safe) with SortableJS drag as a forward-compat enhancement. Spec + tasks: **`openspec/changes/workflow-builder/`**. |
+| 33 | **UI = run cockpit (pipeline rail + panel); agents fully-manual by default** | The UI is reorganized around a **single run cockpit** per run (`/ui/run/{id}` + deep-linkable `/ui/run/{id}/{stage}`): a **pipeline rail** of stage chips (Intake→PM→RFC→Research→Dev→Reviewer→Fixer; build stages per-story) with live status + token chips, clicking a stage opens that agent's workbench panel below — chosen over a full draggable node canvas (deferred). **Every agent (PM included) defaults to `trigger=manual`** (`DEFAULT_AUTO_TRIGGER_AGENTS`→∅; **intake stays auto** as a no-LLM fetch step) so the client drives a run agent-by-agent. Uniform per-stage controls (trigger/stop/restart/re-trigger/HITL feedback) at agent **and** per-story level (generalizes the PM/Dev refine pattern via `Runner.refine_agent`/`retrigger_agent`). Adds **custom prompts** (at run start → `WorkflowState.run_prompt`; at re-trigger → `custom_prompts[agent]`, consume-once), **Dev code-to-LLM observability** (populate `AgentLLMExchange.code`/`context` + a dedicated `/ui/io` page showing sent code + token sizes), and **renames `coding`→`Dev`** everywhere (read-time alias for historical `agent_name="coding"` rows; no migration). Old run-timeline/runs-table/PM-&-Dev-workbench-list pages are **removed** (308 redirects for one release); the **run hub list** becomes the canonical index; the new-run form splits into **Source / Destination & options**. Full spec + phased tasks: **`openspec/changes/ui-flow-overhaul/`**. |
 
 ### 7a. Repo topology — configurable per project
 
@@ -540,9 +542,195 @@ Don't remove a gate until the thing under it has earned it.
 
 ---
 
+## 10z. Agent outputs & data flow (F8 reference)
+
+What each agent emits and whether anything downstream consumes it. (Source of truth: the agent
+modules + `WorkflowState` namespaces in `src/ash/graph/state.py`.)
+
+- **Intake** → `raw_issue` (+ `issue_title`/`issue_url`). Consumed by PM (to write the spec) and, in
+  `raw_to_dev` runs, directly by the build team's `brief()`.
+- **PM** → `pm.spec` (`Spec`: epic + tickets) + `pm.ticket_refs` (pushed board/connector ids).
+  The spec is the **primary downstream input**: `WorkflowState.brief()` serializes it for Research/
+  Dev/Reviewer/Fixer, and `plan_stories` turns its tickets into stories.
+- **RFC** → `rfc.doc` (rendered Markdown), published to `<runtime>/rfc/<run_id>.md` (`rfc.doc_ref`).
+  **Not consumed by any downstream agent today** — it is a standalone, human-facing design
+  artifact. `brief()` deliberately uses the spec/issue, not the RFC. (Opportunity: fold the RFC
+  into Research/Dev context — tracked as a future enhancement, not yet wired.)
+- **Research** → `research.plan` (`ImplementationPlan`: summary + steps + relevant/new files),
+  `research.branch`/`worktree_path`, and a published doc (`research_sink`: file/comment/none).
+  **Consumed by Dev**: the plan is passed into `_code()` and the worktree/branch is reused (Dev
+  falls back to setting up its own worktree when Research is disabled/skipped). Reviewer/Fixer reuse
+  the same branch/worktree.
+- **Dev** → `dev.change` (`CodeChange`), `dev.pr_url`, `files_written`, `branch`/`worktree_path`.
+  The PR is the run's deliverable. With `pr_strategy="single"` (F7) all stories share one
+  branch/worktree and one `combined_pr_url`. **No code/PR ⇒ Dev returns an `error`** (step failure),
+  so Reviewer/Fixer self-skip (they guard on an empty `dev.change`).
+- **Reviewer** → `reviewer.review` (`CodeReview` + `verdict`), optional merge. Fixer runs only on
+  `request_changes`. **Fixer** → `fixer.change` on the same branch (loops back to Reviewer).
+
+**Tool-loop budget (`_explore`).** Tool-using agents (Research/Dev/Reviewer/Fixer) run a bounded
+explore loop: `EXPLORE_STEPS` (default 8) is the **ceiling**, not a fixed count — the model decides
+how many rounds it needs and the loop stops early the first turn it returns no tool calls. So
+"`_explore step 6/8`" means round 6 of an at-most-8 budget; a run may finish in 2. Tune via
+`EXPLORE_STEPS` / `EXPLORE_TOOL_CHARS` / `EXPLORE_WINDOW` for small-context models
+(`config/settings.py`). Tool-free agents (PM/RFC) make one `single_call` instead.
+
+---
+
 ## 11. Changelog
 
 Per the working agreement (top of doc), every decision/implementation change is logged here.
+
+- **2026-06-24 — FIXED + IMPLEMENTED (decision #33 follow-up): retrigger liveness + I/O drawer.**
+  - **Retrigger showed the wrong agent running.** `_augment_liveness` was reading the best-effort
+    `AgentTask` table (most-recent `in_progress`), which a stale row (stopped/failed run) or a
+    pre-marked `auto` next-task could poison → the cockpit highlighted the *next* agent after a
+    retrigger. Rewrote liveness to derive the live stage from the **graph + story state**
+    (`_live_stage`/`_running_build_stage`: the current story's first incomplete build step, or the
+    graph's next run-level node); the task table is now only a stalled fallback. This makes the
+    running-stage indicator correct for all retrigger/refine/retry paths.
+  - **F6 drawer done.** The LLM-I/O exchange rows now open a **Datadog-style slide-out drawer**
+    (Alpine; `ex` hydrated from a per-row `data-ex` JSON blob) showing context / code / sent
+    messages / received, replacing the inline `<details>`. Only the true per-request
+    "pending-row" persistence remains deferred (the agent-granularity in-flight banner covers it).
+  - 232 pytest green; templates smoke-rendered (embedded `data-ex` JSON validated).
+- **2026-06-24 — IMPLEMENTED (decision #34): Workflow builder — reusable, versioned agent flows.**
+  New `Workflow` table (`db/models.py`) + `db/workflows.py` CRUD (list/get/create/update-bump-
+  version/set_default-single-invariant/disable/enable/clone/`default_workflow`, +
+  `normalize_steps`/`snapshot_for`/`step_policy`) + `WorkflowAdmin`. `RunRecord` gains
+  `workflow_id`/`workflow_snapshot` (+ PG backfills); `WorkflowState.workflow_snapshot` carries the
+  frozen definition. **Resolution precedence** rewritten in `BaseAgent._resolve_policy` to
+  **AgentPolicyRecord > workflow snapshot > YAML > default** (Agents page always wins). New-run form
+  gains a **Workflow** dropdown (default pre-selected; built-in sentinel) → `start_run` snapshots the
+  chosen/default workflow; the cockpit shows workflow-disabled agents as `skipped` (`_wf_disabled`)
+  and the workflow name/story_execution in the header. Builder at **`/ui/workflows`**
+  (create/edit/clone/disable/enable/set-default; per-agent enable+auto/manual controls that are
+  no-JS-safe, with SortableJS drag as a forward-compat enhancement) + sidebar nav. **OD1: subset +
+  trigger only** — execution stays canonical pipeline order; true reordering deferred. Soft-delete
+  (disabled excluded from dropdown, kept for history); snapshot-on-execute (edits affect new runs
+  only). New tests: `tests/db/test_workflows.py`, `tests/agents/test_workflow_policy.py`, +
+  builder/status helpers in `tests/web/test_routes_helpers.py`. Full pytest green; `openspec validate
+  workflow-builder --strict` valid. Spec + tasks: **`openspec/changes/workflow-builder/`**.
+- **2026-06-24 — IMPLEMENTED (decision #33 follow-up): combined single PR (F7) + agent-data-flow
+  docs (F8).**
+  - **F7 — one combined PR for multiple stories.** New `pr_strategy` (`per_story` default | `single`)
+    on `WorkflowState` + `RunRecord` (column + IF-NOT-EXISTS backfill + RunRecordAdmin). Chosen on
+    the new-run form (multi-story only) and toggleable at the spec-approval gate
+    (`Runner.set_pr_strategy`). Under `single`, all stories share ONE run-level branch/worktree
+    (`combined_branch`/`combined_worktree`) and stack commits into ONE PR (`combined_pr_url`):
+    `ensure_worktree` seeds a run-level branch + `RepoWorkspace.open_or_create_worktree` reuses the
+    shared worktree; Dev reuses the run-level PR (later stories edit, not re-open); `_story_finalize`
+    skips the shared-worktree cleanup (deferred to `_merge`); the node adapter forwards Dev's
+    run-level keys despite Dev being story-scoped. Cockpit shows a "combined PR" tag + the shared PR
+    link; per-story PR ↗ links retained for `per_story`. The default path is unchanged. Unit-tested
+    (first-story open, later-story reuse, worktree seeding, node passthrough); the live git
+    push/stack + PR edit still needs verification against a real repo (all build git is mocked in
+    tests, as today).
+  - **F8 — docs.** New plan §10z documents each agent's output and what (if anything) consumes it —
+    notably that **RFC is a standalone artifact not fed downstream** and **Research's plan feeds
+    Dev** — plus the `_explore` budget semantics (`EXPLORE_STEPS` is a ceiling; the model stops
+    early). No new DB *models* were added (F7 is a column), so no new admin views; the future
+    `Workflow` model will register one (workflow-builder change).
+  - 211 pytest green; new template branches smoke-rendered.
+- **2026-06-24 — IMPLEMENTED (decision #33 follow-up): LLM I/O page upgrades (Phase F6).** The
+  `/ui/io` + per-run I/O view (`_io_view` in `web/routes.py`, `io_log.html` +
+  `_io_log_results.html`) gained: a collapsible **phase glossary** (`_PHASE_GLOSSARY`:
+  single_call/explore/extract/refine — including that `explore` is numbered up to `EXPLORE_STEPS`
+  and the model stops early); **per-section totals** — each (story, agent) group now shows its own
+  prompt→completion token sum and wall-clock time (folded from the metrics table), plus an overall
+  time total; an **in-flight "response pending"** banner driven by `agent_tasks` in_progress so a
+  long-running Dev call is visible before its exchange persists; **group-level collapse** + a
+  page-level **Expand/Collapse-all**. Deferred: a Datadog-style slide-out drawer (inline `<details>`
+  kept; interactive JS unverifiable here) and true per-request pending-row persistence. 208 pytest
+  green; templates smoke-rendered.
+- **2026-06-24 — IMPLEMENTED (decision #33 follow-up): cockpit Group-1 bug fixes.** Field-testing
+  the run cockpit surfaced a batch of UX/correctness gaps (tracked in
+  `openspec/changes/ui-flow-overhaul/tasks.md` Phase F). Fixed this round:
+  - **Live "running" state.** `Runner.get_run` now attaches `_next_nodes`/`_task_running`; the web
+    layer (`_augment_liveness` in `web/routes.py`) cross-references the `agent_tasks` table to set
+    `running_stage`/`running_story`, so a triggered agent shows **running** (pulsing dot + "… is
+    running" banner) instead of looking like it never ran. `_run_stage_status`/`_story_stage_status`
+    honour it; `_default_stage` therefore lands an opened run on the in-progress stage.
+  - **Stalled-run detection.** When a run is marked `running` but no in-process task is driving it
+    and it isn't paused at a gate (e.g. the server restarted mid-run), the cockpit flags it
+    `stalled`: a red banner names the dead agent and offers **Restart** / **Retry**; SSE stops
+    polling. (`_augment_liveness` + `_cockpit_body.html`.)
+  - **RFC-aware approval.** New `_agent_enabled()` resolver feeds `rfc_enabled` into the cockpit;
+    the PM spec gate hides **"Approve & write RFC"** and shows a "RFC disabled → build starts
+    immediately" hint when RFC is off — no more misleading wording / late "rfc disabled" surprise.
+  - **PM panel polish.** Single/multiple-story tag in the PM header; **Expand/Collapse all** on the
+    ticket list; spec-level **Refine/Re-trigger** moved to the top of the panel.
+  - **Failed PM/RFC dead-end fixed.** The run-level panel's no-spec branch now renders the error +
+    Refine/Re-trigger controls (they previously lived only inside the `if spec` block), so a failed
+    PM/RFC can always be re-run from its panel instead of showing a dead "trigger PM to begin" text.
+  - **Dev no-output = failure.** When Dev produces no edits (so no PR), it now returns an `error`
+    with a logged reason instead of a benign note → the story is marked **failed**, the rail shows
+    Dev red, and Reviewer/Fixer self-skip (they already guard on an empty `dev.change`). This also
+    makes re-trigger/retry give visible feedback (the panel flips to running on redirect).
+  - **208 pytest green;** new template branches (stalled / running / rfc-disabled / dev-error)
+    smoke-rendered. Remaining cockpit items (LLM-I/O page, multi-story single PR, workflows) tracked
+    in Phase F + the new `workflow-builder` change.
+- **2026-06-23 — IMPLEMENTED (decision #33): UI & flow overhaul — run cockpit, fully-manual
+  agents, custom prompts, per-agent HITL, Dev rename, dedicated I/O page.** All five phases of
+  `openspec/changes/ui-flow-overhaul/` shipped; **208 pytest green**, app imports clean (ruff/mypy
+  run manually). Highlights:
+  - **Phase A (backend):** `coding`→`dev` rename everywhere (`DevAgent`/`DevState`/node `dev`/
+    `agent_dev` model override/`StoryStep`; `CodingAgent`+`CodingState` kept as aliases; checkpointer
+    allowlist + API schema updated). **Fully-manual default** — `DEFAULT_AUTO_TRIGGER_AGENTS=∅`,
+    `PMAgent` now calls `_trigger_gate` (intake stays auto). **Custom prompts** —
+    `WorkflowState.run_prompt`+`custom_prompts`, folded by `BaseAgent._extra_instructions`, cleared
+    once by the node wrapper. **Generalized HITL** — `feedback` on Research/Reviewer/Fixer/RFC states;
+    `Runner.refine_agent` + `retrigger_agent` (refine_story_code delegates). **Code-to-LLM capture** —
+    Dev/Research/Reviewer/Fixer pass `context`/`code` to `generate()`.
+  - **Phase B (cockpit):** `/ui/run/{id}` + `/ui/run/{id}/{stage}` with a **pipeline rail**
+    (status dots + token chips) and per-stage panels (`_stage_runlevel.html`, `_stage_build.html`)
+    sharing `_macros.html`; SSE `…/events`; consolidated `POST /ui/run/{id}/{trigger,skip,stop,
+    restart,retry,approve,reject,refine,retrigger}`.
+  - **Phase C (form/dash/hub/nav):** new-run form split **Source / Destination** + custom prompt
+    → redirect to cockpit; run hub list + dashboard (Active/Awaiting KPIs, status dots) → cockpit;
+    legacy `/ui/runs/{id}`, `/ui/pm/*`, `/ui/dev/*` → **308 redirects**; orphaned workbench routes +
+    14 dead templates removed; sidebar rebuilt (+ **LLM I/O**, − PM/Dev workbench).
+  - **Phase D (I/O):** `/ui/io` (global) + `/ui/run/{id}/io` (scoped), `io_log.html` filter bar
+    (agent/story/phase/search) + per-exchange card showing **sent context, sent code (with char
+    size), messages, received, token strip**; `db/exchanges.list_exchanges()` + historical
+    `coding`→`dev` display alias.
+  - **Known follow-ups:** the legacy plural run-timeline SSE + action routes (`/ui/runs/{id}/…`) and
+    `_run_timeline.html` remain as harmless dead code (unreachable from the UI) pending a prune; the
+    `pm_only` flag is retained for API back-compat though the form no longer sets it.
+- **2026-06-23 — PROPOSED (decision #33): UI & flow overhaul — run cockpit + fully-manual agents.**
+  OpenSpec change **`ui-flow-overhaul`** scaffolded (proposal + design + delta specs for `web-ui`/
+  `hitl`/`agent-loop` + phased tasks). Replaces the scattered run-timeline / PM-workbench / Dev-
+  workbench pages with a single **run cockpit** (`/ui/run/{id}` + `/ui/run/{id}/{stage}`): a
+  **pipeline rail** (Intake→PM→RFC→Research→Dev→Reviewer→Fixer; build stages per-story) with live
+  status/token chips, click a stage → its workbench panel. Decisions locked with the client:
+  (a) **pipeline rail + panel** (not a full draggable canvas); (b) **fully-manual default** — every
+  agent incl. PM defaults to `trigger=manual` (`DEFAULT_AUTO_TRIGGER_AGENTS`→∅; intake stays auto);
+  (c) **redesigned run hub list** replaces the old runs table/timeline; (d) **Source/Destination
+  split** new-run form. Plus backend gap-filling: **custom prompts** (run-start + per-agent
+  re-trigger), **generalized per-agent HITL feedback** (extend PM/Dev pattern to Research/Reviewer/
+  Fixer/RFC via `Runner.refine_agent`/`retrigger_agent`), **Dev code-to-LLM capture** (populate the
+  existing `AgentLLMExchange.code`/`context` columns + a dedicated `/ui/io` page with token
+  breakdown), and **rename `coding`→`Dev`** everywhere (read-time alias for historical rows; no DB
+  migration). Phased A–E (backend → cockpit → form/dashboard/hub → I/O page → polish). Spec:
+  **`openspec/changes/ui-flow-overhaul/`**. Not yet implemented.
+- **2026-06-23 — IMPLEMENTED: Dev workbench (story-centric build console) + Dev HITL.** A dedicated
+  `/ui/dev-workbench` mirroring the PM workbench but for the build team: lists runs that have a PM
+  spec (story progress done/total via `list_dev_runs` in `db/runs.py`), and `/ui/dev/{run_id}` shows
+  each story as a card with its Research→Coding→Reviewer→Fixer pipeline, per-story PR link, and
+  token/time chips. Controls (mostly reuse run-level machinery): **Build/Rebuild** a story
+  (`retry_run(ticket_id, from_step)`), **Stop** (`stop_run`), **Resume** (`resume_stopped`),
+  per-step **rerun**, and a spec **Approve** gate. **Dev HITL ("Refine the code"):** new
+  `CodingState.feedback` + `Runner.refine_story_code(run_id, ticket_id, feedback)` resets the story
+  from `coding` (preserving branch/PR so the SAME PR is updated, no duplicate), seeds the feedback
+  into the coding brief (CodingAgent folds it in via a "Human feedback you MUST address" block, then
+  clears it); Reviewer/Fixer re-run on the new code. SSE streams the body while building; LLM I/O at
+  `/ui/dev/{run_id}/llm` (build-team agents only, reusing `llm_exchanges.html`). Cross-linked with
+  the PM workbench. New templates: `dev_workbench{,_runs}.html`, `_dev_workbench_body.html`,
+  `_dev_workbench_runs_results.html`, `_dev_story_card.html`, `_dev_regenerating.html`; nav entry in
+  `base.html`. Tests: `refine_story_code` (feedback threaded, PR preserved), coding feedback
+  injection/clearing, `list_dev_runs`. **204 pytest green.** Observability earlier this session was
+  switched Langfuse→**LangSmith** (zero-code tracing + thin scoring wrapper) and **Chroma removed**
+  (grep-based code search retained).
 
 - **2026-06-18 — IMPLEMENTED: agent↔LLM I/O capture + direct PM workbench listing (decision #30).**
   Every agent↔LLM exchange (the messages sent + the response received) is now persisted to a new

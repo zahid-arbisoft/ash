@@ -10,11 +10,11 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import or_, select
+from sqlalchemy import case, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ash.db.base import get_sessionmaker
-from ash.db.models import RunRecord, SpecRecord
+from ash.db.models import RunRecord, SpecRecord, StoryRecord
 
 if TYPE_CHECKING:
     from ash.schemas import Spec
@@ -147,6 +147,74 @@ async def list_workbench_runs(
                 "run": r,
                 "epic_title": spec.epic_title if spec else None,
                 "ticket_count": spec.ticket_count if spec else None,
+            }
+        )
+    return rows, total
+
+
+async def list_dev_runs(
+    session: AsyncSession,
+    *,
+    query: str = "",
+    project: str = "",
+    page: int = 1,
+    per_page: int = 20,
+) -> tuple[list[dict[str, Any]], int]:
+    """Paginated listing of runs that have a PM spec (so there are stories to build), newest first.
+
+    Powers the Dev workbench list. Sources from SpecRecord (a spec exists → buildable stories),
+    joined to the RunRecord for status/mode. Each row is enriched with story progress
+    (done/total) from StoryRecord so the list shows build state at a glance.
+    """
+    from sqlalchemy import func
+
+    stmt = (
+        select(SpecRecord, RunRecord)
+        .join(RunRecord, RunRecord.run_id == SpecRecord.run_id)
+        .order_by(SpecRecord.created_at.desc())
+    )
+    if project:
+        stmt = stmt.where(SpecRecord.project == project)
+    if query:
+        like = f"%{query}%"
+        stmt = stmt.where(
+            or_(
+                SpecRecord.epic_title.ilike(like),
+                SpecRecord.summary.ilike(like),
+                SpecRecord.item_id.ilike(like),
+            )
+        )
+    total: int = (
+        await session.execute(select(func.count()).select_from(stmt.subquery()))
+    ).scalar_one()
+    pairs = list(
+        (await session.execute(stmt.limit(per_page).offset((page - 1) * per_page))).all()
+    )
+    # Enrich with per-run story progress (done/total) in one grouped query.
+    run_ids = [rec.run_id for rec, _run in pairs]
+    progress: dict[str, dict[str, int]] = {}
+    if run_ids:
+        story_rows = await session.execute(
+            select(
+                StoryRecord.run_id,
+                func.count().label("total"),
+                func.sum(case((StoryRecord.status == "completed", 1), else_=0)).label("done"),
+            )
+            .where(StoryRecord.run_id.in_(run_ids))
+            .group_by(StoryRecord.run_id)
+        )
+        for rid, tot, done in story_rows.all():
+            progress[rid] = {"total": int(tot or 0), "done": int(done or 0)}
+    rows: list[dict[str, Any]] = []
+    for rec, run in pairs:
+        prog = progress.get(rec.run_id, {"total": 0, "done": 0})
+        rows.append(
+            {
+                "run": run,
+                "epic_title": rec.epic_title,
+                "ticket_count": rec.ticket_count,
+                "stories_total": prog["total"],
+                "stories_done": prog["done"],
             }
         )
     return rows, total

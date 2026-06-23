@@ -1,0 +1,143 @@
+{# Build-stage panel (research/dev/reviewer/fixer), scoped to the selected story.
+   Context: run_id, state, selected, selected_story, stories, stage_labels, build_stages, metrics. #}
+{% import "_macros.html" as ui %}
+{%- set story = stories.get(selected_story) or {} -%}
+{%- set ns = story.get(selected) or {} -%}
+{%- set st = (stages | selectattr("name","equalto",selected) | list | first) or {"status":"pending"} -%}
+{%- set status = st.status -%}
+{%- set is_awaiting_trigger = state.get("pending_trigger") == selected and state.get("pending_story") == selected_story -%}
+
+{% if not stories %}
+<div class="bg-surface border border-border rounded-xl px-5 py-12 text-center">
+  {% if state.get("pm") and state.pm.get("spec") %}
+  <p class="text-muted text-sm">No stories planned yet — approve the spec on the
+    <a href="/ui/run/{{ run_id }}/pm" class="text-accent hover:underline">PM stage</a> to start building.</p>
+  {% else %}
+  <p class="text-muted text-sm">No spec yet. Trigger
+    <a href="/ui/run/{{ run_id }}/pm" class="text-accent hover:underline">PM</a> first.</p>
+  {% endif %}
+</div>
+{% else %}
+<div class="bg-surface border border-border rounded-xl p-5">
+  <div class="flex items-center justify-between mb-3 flex-wrap gap-2">
+    <h2 class="font-semibold flex items-center gap-2">
+      {{ ui.status_dot(status) }}
+      {{ stage_labels.get(selected, selected) }}
+      <span class="text-muted font-normal text-sm">· story <span class="font-mono">{{ selected_story }}</span></span>
+      {{ ui.status_pill(status) }}
+    </h2>
+    <div class="flex items-center gap-3">
+      {{ ui.token_chip(((metrics.get("by_story") or {}).get(selected_story) or {}).get(selected, {})) }}
+      {% if story.get("pr_url") %}<a href="{{ story.pr_url }}" target="_blank" class="text-xs text-accent hover:underline">PR ↗</a>{% endif %}
+    </div>
+  </div>
+
+  {% if story.get("title") %}<p class="text-sm text-muted mb-3">{{ story.title }}</p>{% endif %}
+
+  {# combined-PR strategy (F7): one shared PR for all stories #}
+  {% if state.get("pr_strategy") == "single" %}
+  <div class="mb-3 flex items-center gap-2 text-xs">
+    <span class="px-2 py-0.5 rounded-full bg-elevate text-muted border border-border">combined PR</span>
+    {% if state.get("combined_pr_url") %}
+    <a href="{{ state.combined_pr_url }}" target="_blank" class="text-accent hover:underline">Combined PR for all stories ↗</a>
+    {% else %}
+    <span class="text-muted">All stories stack onto one shared branch — the PR opens once Dev runs.</span>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  {# awaiting manual trigger #}
+  {% if is_awaiting_trigger %}
+  <div class="border border-accent/30 bg-accent/5 rounded-lg p-4 mb-4">
+    <p class="text-sm text-muted mb-3">The {{ selected }} agent is waiting for you to start it on this story.</p>
+    {{ ui.trigger_controls(run_id, selected, selected_story) }}
+  </div>
+  {% endif %}
+
+  {# running #}
+  {% if status == "running" %}
+  <div class="border border-warn/30 bg-warn/5 rounded-lg p-3 mb-4 text-sm text-warn flex items-center gap-2">
+    <span class="inline-block w-2 h-2 rounded-full bg-warn animate-pulse"></span>
+    {{ stage_labels.get(selected, selected) }} is running on story <span class="font-mono">{{ selected_story }}</span>…
+  </div>
+  {% endif %}
+
+  {# merge approval gate (reviewer) #}
+  {% if selected == "reviewer" and state.get("pending_merge") and state.get("pending_story") == selected_story %}
+  <div class="border border-ok/40 bg-ok/5 rounded-lg p-4 mb-4">
+    <p class="text-sm text-muted mb-3">Reviewer approved — merge awaiting your approval.</p>
+    <form method="post" action="/ui/run/{{ run_id }}/approve">
+      <input type="hidden" name="stage" value="reviewer"><input type="hidden" name="story" value="{{ selected_story }}">
+      <button class="bg-ok text-bg font-semibold text-sm rounded-lg px-4 h-9 hover:brightness-110">✓ Approve merge</button>
+    </form>
+  </div>
+  {% endif %}
+
+  {% if ns.get("error") %}
+  <div class="border border-danger/30 bg-danger/5 rounded-lg p-3 mb-4 text-sm text-danger">{{ ns.error }}</div>
+  {% endif %}
+
+  {# ── stage-specific content ── #}
+  {% if selected == "research" %}
+    {%- set plan = ns.get("plan") -%}
+    {% if plan %}
+    <p class="text-sm">{{ plan.get("summary","") }}</p>
+    {% if plan.get("steps") %}
+    <div class="mt-2 text-xs uppercase tracking-wide text-muted">Steps</div>
+    <ol class="list-decimal ml-5 text-sm text-muted space-y-0.5">{% for s in plan.steps %}<li>{{ s }}</li>{% endfor %}</ol>
+    {% endif %}
+    {% if plan.get("relevant_files") %}
+    <div class="mt-2 text-xs uppercase tracking-wide text-muted">Relevant files</div>
+    <div class="text-xs font-mono text-muted">{{ plan.relevant_files | join(", ") }}</div>
+    {% endif %}
+    {% else %}<p class="text-sm text-muted">{{ ns.get("note") or "No research plan yet." }}</p>{% endif %}
+
+  {% elif selected == "dev" %}
+    {%- set change = ns.get("change") -%}
+    {% if change %}<p class="text-sm">{{ change.get("summary","") }}</p>{% endif %}
+    {% if ns.get("files_written") %}
+    <div class="mt-2 text-xs uppercase tracking-wide text-muted">Files written</div>
+    <div class="text-xs font-mono text-muted">{{ ns.files_written | join(", ") }}</div>
+    {% endif %}
+    {% if ns.get("note") %}<p class="text-xs text-muted mt-2">{{ ns.note }}</p>{% endif %}
+    {% if not change %}<p class="text-sm text-muted">{{ ns.get("note") or "Nothing built yet." }}</p>{% endif %}
+
+  {% elif selected == "reviewer" %}
+    {%- set review = ns.get("review") -%}
+    {% if review %}
+    <div class="flex items-center gap-2 text-sm">
+      <span class="px-2 py-0.5 rounded {{ 'bg-ok/15 text-ok' if ns.get('verdict')=='approve' else 'bg-warn/15 text-warn' }}">{{ ns.get("verdict","") }}</span>
+      <span class="text-muted">{{ (review.get("findings") or [])|length }} finding(s)</span>
+    </div>
+    <p class="text-sm text-muted mt-1">{{ review.get("summary","") }}</p>
+    {% if review.get("findings") %}
+    <div class="mt-2 space-y-1">
+      {% for f in review.findings %}
+      <div class="text-xs border border-border rounded p-2">
+        <span class="font-semibold uppercase">[{{ f.get("severity","") }}]</span>
+        <span class="font-mono text-muted">{{ f.get("path","") }}{% if f.get("line") %}:{{ f.line }}{% endif %}</span>
+        — {{ f.get("comment","") }}
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
+    {% else %}<p class="text-sm text-muted">{{ ns.get("note") or "Not reviewed yet." }}</p>{% endif %}
+
+  {% elif selected == "fixer" %}
+    {%- set change = ns.get("change") -%}
+    {% if change %}<p class="text-sm">{{ change.get("summary","") }}</p>
+    <p class="text-xs text-muted mt-1">{{ ns.get("note","") }} · {{ ns.get("iterations",0) }} iteration(s)</p>
+    {% else %}<p class="text-sm text-muted">{{ ns.get("note") or "No fixes applied." }}</p>{% endif %}
+  {% endif %}
+
+  {# ── per-stage actions (retry from here + HITL) ── #}
+  <div class="mt-4 pt-3 border-t border-border flex items-center gap-2 flex-wrap">
+    <form method="post" action="/ui/run/{{ run_id }}/retry">
+      <input type="hidden" name="stage" value="{{ selected }}"><input type="hidden" name="story" value="{{ selected_story }}">
+      <input type="hidden" name="from_step" value="{{ selected }}">
+      <button class="text-xs px-2.5 h-7 rounded-md border border-border text-muted hover:text-fg hover:border-accent/50">↻ Re-run from {{ selected }}</button>
+    </form>
+  </div>
+  {{ ui.hitl_controls(run_id, selected, selected_story, busy=(status=="running")) }}
+</div>
+{% endif %}

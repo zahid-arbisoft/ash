@@ -31,7 +31,6 @@ dependencies = [
     "langchain-community>=0.3",
     "pypdf>=5.0",
     "docx2txt>=0.8",
-    "chromadb>=0.5,<2.0",
     "croniter>=2.0",
 ]
 
@@ -84,7 +83,7 @@ packages = ["ash"]
 [[tool.mypy.overrides]]
 module = [
     "git", "git.*", "langgraph.*", "langchain_anthropic.*", "langchain_openai.*",
-    "sqladmin.*", "langchain_community.*", "docx2txt.*", "langchain_mcp_adapters.*", "chromadb", "chromadb.*"
+    "sqladmin.*", "langchain_community.*", "docx2txt.*", "langchain_mcp_adapters.*",
 ]
 ignore_missing_imports = true
 

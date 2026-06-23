@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% import "_macros.html" as ui %}
 {% block title %}Runs{% endblock %}
 {% block breadcrumb %}Runs{% endblock %}
 {% block body %}
@@ -47,14 +48,13 @@
       {% for r in runs %}
       {% set mt = {"raw_to_spec":"bg-accent/15 text-accent","spec_ready":"bg-ok/15 text-ok",
                    "raw_to_dev":"bg-warn/15 text-warn"}.get(r.intake_mode, "bg-border text-muted") %}
-      {% set st = {"completed":"text-ok","failed":"text-danger","awaiting_review":"text-warn",
-                   "running":"text-accent"}.get(r.status, "text-muted") %}
-      <tr class="border-t border-border/60 hover:bg-elevate/40">
-        <td class="px-5 py-2.5"><a href="/ui/runs/{{ r.run_id }}" class="font-mono text-accent hover:underline">{{ r.run_id[:12] }}</a></td>
+      <tr class="border-t border-border/60 hover:bg-elevate/40 cursor-pointer"
+          onclick="window.location='/ui/run/{{ r.run_id }}'">
+        <td class="px-5 py-2.5"><a href="/ui/run/{{ r.run_id }}" class="font-mono text-accent hover:underline">{{ r.run_id[:12] }}</a></td>
         <td class="px-3 py-2.5">{{ r.project }}</td>
         <td class="px-3 py-2.5 text-muted">{{ r.item_id or "—" }}</td>
         <td class="px-3 py-2.5"><span class="text-xs px-2 py-0.5 rounded-full {{ mt }}">{{ r.intake_mode }}</span></td>
-        <td class="px-3 py-2.5 text-xs {{ st }}">{{ r.status }}</td>
+        <td class="px-3 py-2.5"><span class="inline-flex items-center gap-1.5 text-xs">{{ ui.status_dot(r.status or "running") }} {{ (r.status or "running").replace("_"," ") }}</span></td>
         <td class="px-5 py-2.5 text-right text-muted whitespace-nowrap">{{ r.created_at.strftime("%b %d, %H:%M") }}</td>
       </tr>
       {% endfor %}

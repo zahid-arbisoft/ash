@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 # Build-team nodes that operate on the CURRENT story rather than run-level state. Their flat
 # namespace is hydrated from `stories[current_story]` before the agent runs and the result is
 # folded back into that story afterwards (decision #26).
-_SCOPED_STEPS: frozenset[str] = frozenset({"research", "coding", "reviewer", "fixer"})
+_SCOPED_STEPS: frozenset[str] = frozenset({"research", "dev", "reviewer", "fixer"})
 
 # Map graph node name → the AgentTask agent_name it belongs to (for task tracking).
 # "pm" and "pm_publish" both contribute to the single "pm" task.
@@ -34,7 +34,7 @@ _NODE_TASK_AGENT: dict[str, str] = {
     "pm_publish": "pm",
     "rfc": "rfc",
     "research": "research",
-    "coding": "coding",
+    "dev": "dev",
     "reviewer": "reviewer",
     "fixer": "fixer",
 }
@@ -45,8 +45,8 @@ _NEXT_TASK_AGENT: dict[str, str | None] = {
     "intake": None,           # pm task created after intake, but PM runs immediately
     "pm_publish": "research", # after spec approval: create research task
     "rfc": None,              # research task was already created by pm_publish
-    "research": "coding",
-    "coding": "reviewer",
+    "research": "dev",
+    "dev": "reviewer",
     "reviewer": None,         # handled per-verdict below
     "fixer": "reviewer",      # fixer loops back to reviewer
 }
@@ -128,13 +128,13 @@ def _hydrate_story(state: WorkflowState) -> StoryState:
     current = state.current_story
     story = state.stories.get(current) or StoryState(ticket_id=current)
     state.research = story.research.model_copy(deep=True)
-    state.coding = story.coding.model_copy(deep=True)
+    state.dev = story.dev.model_copy(deep=True)
     state.reviewer = story.reviewer.model_copy(deep=True)
     state.fixer = story.fixer.model_copy(deep=True)
-    # Preserve story-level PR identity onto the (possibly reset) coding scratch so a
+    # Preserve story-level PR identity onto the (possibly reset) dev scratch so a
     # regenerate/retry updates the SAME PR instead of opening a duplicate (decision #26 / F2).
-    state.coding.branch = state.coding.branch or story.branch
-    state.coding.pr_url = state.coding.pr_url or story.pr_url
+    state.dev.branch = state.dev.branch or story.branch
+    state.dev.pr_url = state.dev.pr_url or story.pr_url
     state.ticket_id = current
     return story
 
@@ -217,9 +217,21 @@ def make_node(
         if task_agent:
             await _handle_post_run(state, _node, task_agent, result, ticket_id=ticket_id)
 
-        if scoped:
-            return _fold_story(state, agent.name, result)
-        return result
+        update = _fold_story(state, agent.name, result) if scoped else result
+        # A story-scoped agent may also return RUN-LEVEL keys (e.g. Dev's combined-PR identity:
+        # combined_branch/combined_worktree/combined_pr_url — F7). `_fold_story` only keeps the
+        # agent's own namespace, so pass those extra top-level keys through explicitly.
+        if scoped and isinstance(result, dict):
+            for k, v in result.items():
+                if k != agent.name and k not in update:
+                    update[k] = v
+        # Consume-once custom prompt (decision #33): once an agent has run with its custom prompt
+        # folded in, drop it so a later forward pass / retry doesn't re-apply stale instructions.
+        if isinstance(update, dict) and state.custom_prompts.get(agent.name):
+            update["custom_prompts"] = {
+                k: v for k, v in state.custom_prompts.items() if k != agent.name
+            }
+        return update
 
     return node
 

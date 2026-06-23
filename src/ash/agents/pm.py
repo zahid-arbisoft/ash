@@ -71,10 +71,16 @@ for any undecided technology, undefined external interface, or named unknown in 
 
 _STORY_MODE_SINGLE = """\
 
-STORY MODE — SINGLE (important): the client wants this delivered as ONE story/ticket. Produce \
-exactly ONE implementation ticket that covers the whole ask end-to-end (you MAY additionally add a \
-single SPIKE ticket if investigation is genuinely required first). Do NOT split the work into \
-multiple parallel implementation tickets. Keep the epic and technical spec as usual.\
+STORY MODE — SINGLE (HARD CONSTRAINT — NON-NEGOTIABLE):
+The client wants ONE ticket. Return exactly ONE ticket in the `tickets` array.
+- ONE ticket. Not two. Not three. Exactly one.
+- Do NOT split the work into parallel or sequential tickets.
+- If research/investigation is needed, set `needs_research=true` on that single ticket — \
+do NOT add a separate spike ticket.
+- The single ticket MUST cover the complete end-to-end implementation with full detail: \
+a thorough description (5+ sentences), at least 3 acceptance criteria, concrete \
+implementation_notes (5+ ordered steps), and all affected files listed.
+- Keep the epic and technical spec sections as usual.\
 """
 
 _STORY_MODE_MULTIPLE = """\
@@ -99,14 +105,16 @@ Your spec must:
 "spike" and `needs_research` to true (the Research agent will pick those up).
 - Assess risks honestly with severity and mitigations.
 
-Ticket quality bar — each ticket MUST be detailed:
-- State what needs to be built and why (user/system motivation).
-- Name specific files, modules, endpoints, or schema fields involved.
-- Describe the implementation approach and key design decisions.
-- Provide acceptance criteria (at least 2-3).
+Ticket quality bar — each ticket MUST be detailed enough for a developer to start without \
+asking follow-up questions:
+- `description`: at least 4-6 sentences covering WHAT, WHY, the implementation approach, \
+and any key constraints.
+- `implementation_notes`: a numbered list of at least 4 concrete implementation steps, \
+referencing specific files, modules, endpoints, or schema fields.
+- `affected_files`: list the actual files/paths involved.
+- `acceptance_criteria`: at least 3 specific, testable conditions.
+- `out_of_scope`: explicitly state what this ticket excludes.
 - Provide traditional and LLM-assisted estimates (llm_estimate ≈ estimate / 6).
-- Call out what is out of scope.
-A developer must be able to pick up any ticket cold without asking follow-up questions.
 
 Be specific and grounded. Prefer the smallest change that fully satisfies the requirements.\
 """
@@ -156,24 +164,27 @@ You are a senior tech lead writing ONE implementation ticket in full detail for 
 will pick it up cold. You are given the full source requirements/spec, the epic, and a short \
 outline of the specific ticket to expand.
 
-Expand the outline into a thorough, self-contained ticket. CRITICAL rules:
-- PRESERVE specifics from the source spec — copy real model field names, endpoint paths, \
-task/queue names, file paths, and acceptance criteria into this ticket. Do NOT summarise it away.
-- `description`: a complete narrative of WHAT to build and WHY (several sentences).
-- `implementation_notes`: the HOW — concrete, ordered steps referencing real modules/classes/\
-functions; key design decisions and constraints. This must be substantial, not one line.
-- `affected_files`: the actual files/paths this ticket touches.
-- `api_changes` / `data_model_changes`: concrete endpoint and model/field changes from the spec \
-that belong to THIS ticket (empty lists if genuinely none).
-- `acceptance_criteria`: 2-5 concrete, testable conditions, drawn from the spec where present.
-- `out_of_scope`: what this ticket deliberately excludes (to bound it against sibling tickets).
+Expand the outline into a thorough, self-contained ticket. MINIMUM QUALITY BAR — ALL fields must \
+meet these minimums or a developer cannot pick it up without asking questions:
+- `description`: at least 5-7 complete sentences covering WHAT to build, WHY it is needed, \
+the concrete implementation approach, and any key constraints or gotchas.
+- `implementation_notes`: at least 5 concrete, ordered steps for HOW to implement — \
+reference real modules/classes/functions; include key design decisions and constraints. \
+Must be a detailed numbered list or multiple paragraphs. A one-liner FAILS this bar.
+- `affected_files`: every file this ticket creates or modifies. Use real paths from the \
+spec/codebase. Do NOT leave this empty.
+- `api_changes` / `data_model_changes`: copy verbatim from the spec — do NOT summarise away. \
+Empty lists only when the spec truly has none for this ticket.
+- `acceptance_criteria`: at least 3 concrete, testable done-conditions drawn from the spec.
+- `out_of_scope`: explicitly state what this ticket does NOT include.
 - `estimate`: traditional time estimate without AI tooling (e.g. "S", "1d", "3d", "1w").
 - `estimate_days`: the same estimate as a decimal number of person-days (S→0.5, M→2, L→5, \
 "3d"→3.0, "1w"→5.0, "8h"→1.0).
 - `llm_estimate`: same work with LLM pair-programming — typically 5–8× faster (e.g. if \
 estimate is "3d", llm_estimate is "0.4d"). Use the same unit as estimate.
-- `llm_estimate_days`: same as llm_estimate but decimal days (e.g. estimate_days=3.0 → \
-llm_estimate_days≈0.5).
+- `llm_estimate_days`: decimal days (e.g. estimate_days=3.0 → llm_estimate_days≈0.5).
+- PRESERVE specifics from the source spec — copy real field names, endpoint paths, \
+task/queue names, file paths verbatim. Do NOT summarise them away.
 
 Stay strictly within the scope implied by the outline; do not absorb other tickets' work. Keep the \
 ticket id, title, type, and dependencies exactly as given in the outline.\
@@ -225,19 +236,22 @@ You are a senior tech lead expanding a set of implementation tickets in full det
 developer who will pick them up cold. You are given the full source requirements/spec, the epic, \
 and a list of thin tickets to expand.
 
-Expand EVERY ticket in the list into a thorough, self-contained implementation story. CRITICAL rules:
-1. PRESERVE specifics from the source spec — copy real model field names, endpoint paths, \
-task/queue names, file paths, and acceptance criteria into the tickets. Do NOT summarise it away.
-2. `description`: a complete narrative of WHAT to build and WHY (several sentences).
-3. `implementation_notes`: the HOW — concrete, ordered steps referencing real modules/classes/\
-functions; key design decisions and constraints. This must be substantial, not one line.
-4. `affected_files`: the actual files/paths this ticket touches.
-5. `api_changes` / `data_model_changes`: concrete endpoint and model/field changes from the spec \
-that belong to THIS ticket (empty lists if genuinely none).
-6. `acceptance_criteria`: 2-5 concrete, testable conditions, drawn from the spec where present.
-7. `out_of_scope`: what this ticket deliberately excludes (to bound it against sibling tickets).
-8. `estimate` / `estimate_days` / `llm_estimate` / `llm_estimate_days`: provide traditional and \
-LLM-assisted estimates (5-8x speedup). Use decimal days for the _days fields.
+Expand EVERY ticket in the list into a thorough, self-contained implementation story. \
+MINIMUM QUALITY BAR — each ticket MUST meet ALL of these or a developer cannot pick it up:
+1. `description`: at least 5-7 complete sentences — WHAT to build, WHY it is needed, \
+the concrete implementation approach, key constraints or gotchas.
+2. `implementation_notes`: at least 5 concrete, ordered steps for HOW to implement this — \
+reference real modules/classes/functions. Must be a detailed numbered list or multiple paragraphs. \
+A one-liner or vague summary FAILS this bar.
+3. `affected_files`: list every file this ticket creates or changes. Use real paths from the \
+spec/codebase. Do NOT leave this empty.
+4. `api_changes` / `data_model_changes`: copy verbatim from the spec — do NOT summarise away.
+5. `acceptance_criteria`: at least 3 concrete, testable done-conditions drawn from the spec.
+6. `out_of_scope`: explicitly state what this ticket does NOT include.
+7. `estimate` / `estimate_days` / `llm_estimate` / `llm_estimate_days`: traditional and \
+LLM-assisted estimates (5-8x speedup). Use decimal days for _days fields.
+8. PRESERVE specifics from the source spec — copy real field names, endpoint paths, \
+task/queue names, file paths verbatim. Do NOT summarise them away.
 
 Stay strictly within the scope implied by the outlines. Keep the ticket id, title, type, and \
 dependencies exactly as given. Return the list of FULLY DETAILED tickets.\
@@ -279,6 +293,19 @@ class Tickets(BaseModel):
     tickets: list[Ticket]
 
 
+def _ticket_is_thin(t: Ticket) -> bool:
+    """Return True when a ticket lacks minimum detail — used as a quality gate after elaboration.
+
+    Thresholds are intentionally low so only obviously under-specified tickets are caught:
+    a short `implementation_notes`, missing `acceptance_criteria`, or a one-liner `description`.
+    """
+    return (
+        len(t.implementation_notes.strip()) < 80
+        or len(t.description.strip()) < 120
+        or len(t.acceptance_criteria) < 2
+    )
+
+
 class PMAgent(BaseAgent):
     """Phase 1: ingest requirements, generate Spec, write to the Board. No ticket push yet."""
 
@@ -286,6 +313,11 @@ class PMAgent(BaseAgent):
 
     async def run(self, state: WorkflowState) -> dict[str, Any]:
         self._reset_usage()
+        # Fully-manual default (decision #33): PM pauses for an explicit Trigger unless its policy
+        # opts into auto. Intake stays auto, so a fresh run lands here awaiting the client's click.
+        skip = await self._trigger_gate(state)
+        if skip is not None:
+            return skip
         project = load_project(state.project)
 
         context = await self._gather(state)
@@ -307,8 +339,25 @@ class PMAgent(BaseAgent):
             user_prompt += _USER_FEEDBACK.format(
                 feedback=state.pm.feedback, prev_spec=prev[: self.settings.pm_detail_context_chars]
             )
+        # Optional custom prompt (run-start + per-agent re-trigger), folded after feedback.
+        extra = self._extra_instructions(state)
+        if extra:
+            user_prompt += f"\n\n## Additional instructions\n{extra}"
 
         spec = await self.generate(Spec, system=system, user=user_prompt, context=context)
+
+        # Hard single-mode enforcement: small models often ignore "exactly ONE" instructions.
+        # Trim BEFORE validation and elaboration so we never waste work on discarded tickets.
+        if state.story_mode == "single" and len(spec.tickets) > 1:
+            logger.warning(
+                "[pm] single mode: model returned %d tickets; trimming to 1", len(spec.tickets)
+            )
+            non_spike = [t for t in spec.tickets if not t.needs_research]
+            kept = non_spike[:1] if non_spike else spec.tickets[:1]
+            # Clear dependencies — siblings were discarded, any cross-refs are now dangling.
+            kept[0] = kept[0].model_copy(update={"dependencies": []})
+            spec.tickets = kept
+
         spec = await self._validate_and_repair(spec, system=system, context=context)
 
         if getattr(self.settings, "pm_detail_tickets", True):
@@ -429,6 +478,23 @@ class PMAgent(BaseAgent):
                     rich.needs_research = t.needs_research
                     rich.title = t.title or rich.title
                     detailed.append(repair_ticket_estimates(rich, speedup=self.settings.pm_estimate_speedup))
+
+                # Quality gate: re-elaborate tickets that bulk left too thin (common with
+                # small/local models that compress output to fit token limits).
+                thin_indices = [i for i, t in enumerate(detailed) if _ticket_is_thin(t)]
+                if thin_indices:
+                    logger.warning(
+                        "[pm] %d thin ticket(s) after bulk elaborate; re-elaborating sequentially: %s",
+                        len(thin_indices),
+                        [detailed[i].id for i in thin_indices],
+                    )
+                    for i in thin_indices:
+                        try:
+                            detailed[i] = await self._elaborate_one(detailed[i], epic=epic, ctx=ctx)
+                        except Exception as exc2:  # noqa: BLE001
+                            logger.warning(
+                                "[pm] re-elaborate of %s failed (%s); keeping", detailed[i].id, exc2
+                            )
 
                 spec.tickets = detailed
                 return spec

@@ -98,6 +98,17 @@ class RepoWorkspace:
         self.repo.git.worktree("add", "-b", branch, str(wt_path), base_ref)
         return wt_path
 
+    def open_or_create_worktree(self, branch: str, base_ref: str) -> Path:
+        """Reuse an existing worktree for `branch` if present, else create it fresh from `base_ref`.
+
+        Used by the combined-PR strategy (F7): the first story creates the shared worktree; later
+        stories reuse it (with all prior stories' commits intact) so their changes stack onto the
+        same branch instead of resetting it. Falls back to `create_worktree` when nothing exists."""
+        wt_path = self.worktrees_root / branch.replace("/", "__")
+        if wt_path.exists() and (wt_path / ".git").exists():
+            return wt_path
+        return self.create_worktree(branch, base_ref)
+
     def remove_worktree(self, wt_path: Path, *, force: bool = True) -> None:
         args = ["remove", str(wt_path)]
         if force:

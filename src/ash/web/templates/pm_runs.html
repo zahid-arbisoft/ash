@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% block title %}PM specs{% endblock %}
-{% block breadcrumb %}<a href="/ui/pm-workbench" class="hover:text-fg">PM workbench</a> / Specs{% endblock %}
+{% block breadcrumb %}<a href="/ui/runs" class="hover:text-fg">PM workbench</a> / Specs{% endblock %}
 {% block body %}
 
 <div class="flex items-center justify-between mb-5">
@@ -9,7 +9,7 @@
     <p class="text-sm text-muted mt-0.5">Every spec the PM agent has generated (all runs) — searchable archive.</p>
   </div>
   <div class="flex items-center gap-3">
-    <a href="/ui/pm-workbench" class="text-sm text-muted hover:text-fg hover:underline">← Workbench runs</a>
+    <a href="/ui/runs" class="text-sm text-muted hover:text-fg hover:underline">← Workbench runs</a>
     <a href="/ui/pm/new"
        class="bg-accent text-bg font-semibold text-sm rounded-lg px-4 h-9 inline-flex items-center hover:brightness-110">
       + New PM run

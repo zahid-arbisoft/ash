@@ -8,14 +8,17 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 import uuid
 from typing import Any, cast
+
+logger = logging.getLogger(__name__)
 
 from langgraph.types import Command
 from pydantic_core import to_jsonable_python
 
 from ash.graph.state import (
-    CodingState,
+    DevState,
     FixerState,
     PMState,
     ResearchState,
@@ -27,7 +30,7 @@ from ash.graph.state import (
 from ash.schemas import Spec
 
 # Per-story build steps, in execution order (decision #26).
-_STORY_STEPS: tuple[str, ...] = ("research", "coding", "reviewer", "fixer")
+_STORY_STEPS: tuple[str, ...] = ("research", "dev", "reviewer", "fixer")
 
 
 def _fresh_substate(step: str) -> Any:
@@ -36,7 +39,7 @@ def _fresh_substate(step: str) -> Any:
         "pm": PMState,
         "rfc": RFCState,
         "research": ResearchState,
-        "coding": CodingState,
+        "dev": DevState,
         "reviewer": ReviewerState,
         "fixer": FixerState,
     }[step]()
@@ -49,7 +52,7 @@ def _reset_story_from(story_dict: dict[str, Any], step: str) -> StoryState:
     story = StoryState.model_validate(story_dict)
     fresh = {
         "research": ResearchState,
-        "coding": CodingState,
+        "dev": DevState,
         "reviewer": ReviewerState,
         "fixer": FixerState,
     }
@@ -82,6 +85,11 @@ class Runner:
             self._tasks.discard(t)
             if self._run_tasks.get(run_id) is t:
                 self._run_tasks.pop(run_id, None)
+            if not t.cancelled() and (exc := t.exception()) is not None:
+                logger.error(
+                    "[runner] background task for run %s failed: %s: %s",
+                    run_id, type(exc).__name__, exc,
+                )
 
         task.add_done_callback(_done)
 
@@ -101,7 +109,10 @@ class Runner:
         task_sink_id: int | None = None,
         ticket_id: str = "",
         story_mode: str = "single",
+        pr_strategy: str = "per_story",
         pm_only: bool = False,
+        run_prompt: str = "",
+        workflow_snapshot: dict[str, Any] | None = None,
         wait: bool = False,
     ) -> str:
         run_id = uuid.uuid4().hex
@@ -116,7 +127,10 @@ class Runner:
             task_sink_id=task_sink_id,
             ticket_id=ticket_id,
             story_mode=story_mode,  # type: ignore[arg-type]
+            pr_strategy=pr_strategy,  # type: ignore[arg-type]
             pm_only=pm_only,
+            run_prompt=run_prompt,
+            workflow_snapshot=workflow_snapshot or {},
         )
 
         async def _invoke() -> None:
@@ -140,7 +154,9 @@ class Runner:
         config = self._config(run_id)
 
         async def _do() -> None:
+            logger.info("[runner] resume_run start run=%s decision=%r", run_id[:8], decision)
             await self._graph.ainvoke(Command(resume=decision), config=config)
+            logger.info("[runner] resume_run done run=%s", run_id[:8])
             await self._sync_status(run_id)
 
         if background:
@@ -293,6 +309,158 @@ class Runner:
         await self._graph.aupdate_state(config, update, as_node="intake")
         return await self._drive(run_id, config, wait)
 
+    # Run-level agents whose refine forks the graph at the named predecessor node.
+    _REFINE_AS_NODE = {"pm": "intake", "rfc": "pm_publish"}
+
+    async def refine_agent(
+        self,
+        run_id: str,
+        *,
+        agent: str,
+        ticket_id: str | None = None,
+        feedback: str = "",
+        custom_prompt: str = "",
+        wait: bool = False,
+    ) -> dict[str, Any] | None:
+        """Generalized per-agent HITL (decision #33): re-run any agent with optional feedback and
+        an optional custom prompt, threading both into that agent's prompt for one pass.
+
+        - Build agents (research/dev/reviewer/fixer) with a ``ticket_id``: reset that story from
+          the agent's step onward (preserving branch/pr_url so the PR is updated, not duplicated),
+          seed the step's ``feedback``, and re-enter the story loop via ``as_node="plan_stories"``
+          so downstream build steps re-run on the new output.
+        - Run-level agents (pm/rfc): fork the graph at the agent's predecessor with a fresh
+          sub-state carrying the feedback (PM also bumps ``regeneration_count``).
+
+        ``custom_prompt`` is stored on ``custom_prompts[agent]`` (consumed once by the node
+        wrapper). Returns the current state unchanged when the target can't be resolved.
+        """
+        current = await self.get_run(run_id)
+        if current is None:
+            return None
+        config = self._config(run_id)
+        fb = feedback or None
+        cp = (custom_prompt or "").strip()
+
+        def _with_cp(patch: dict[str, Any]) -> dict[str, Any]:
+            if cp:
+                merged = dict(current.get("custom_prompts") or {})
+                merged[agent] = cp
+                patch["custom_prompts"] = merged
+            return patch
+
+        # ── per-story build agents ────────────────────────────────────────────
+        if agent in _STORY_STEPS:
+            if ticket_id is None:
+                logger.warning("[runner] refine_agent: agent=%s requires a ticket_id — no-op", agent)
+                return current
+            stories = current.get("stories") or {}
+            story_dict = stories.get(ticket_id)
+            if not isinstance(story_dict, dict):
+                logger.warning("[runner] refine_agent: ticket %s not found in stories — no-op", ticket_id)
+                return current
+            reset = _reset_story_from(story_dict, agent)
+            setattr(getattr(reset, agent), "feedback", fb)
+            patch = _with_cp(
+                {"stories": {ticket_id: reset}, "current_story": "", "status": "running"}
+            )
+            await self._graph.aupdate_state(config, patch, as_node="plan_stories")
+            return await self._drive(run_id, config, wait)
+
+        # ── run-level agents (pm / rfc) ───────────────────────────────────────
+        as_node = self._REFINE_AS_NODE.get(agent)
+        if as_node is None:
+            return current
+        if agent == "pm":
+            prior = int((current.get("pm") or {}).get("regeneration_count", 0) or 0)
+            patch = _with_cp(
+                {
+                    "pm": PMState(feedback=fb, regeneration_count=prior + 1),
+                    "stories": {},
+                    "story_order": [],
+                    "current_story": "",
+                    "status": "running",
+                }
+            )
+        else:  # rfc
+            patch = _with_cp({"rfc": RFCState(feedback=fb), "status": "running"})
+        await self._graph.aupdate_state(config, patch, as_node=as_node)
+        return await self._drive(run_id, config, wait)
+
+    async def retrigger_agent(
+        self,
+        run_id: str,
+        *,
+        agent: str,
+        ticket_id: str | None = None,
+        custom_prompt: str = "",
+        wait: bool = False,
+    ) -> dict[str, Any] | None:
+        """Re-run an agent for a better result with an optional custom prompt (no feedback).
+        Thin wrapper over ``refine_agent`` (decision #33)."""
+        return await self.refine_agent(
+            run_id, agent=agent, ticket_id=ticket_id, feedback="",
+            custom_prompt=custom_prompt, wait=wait,
+        )
+
+    async def refine_story_code(
+        self,
+        run_id: str,
+        *,
+        ticket_id: str,
+        feedback: str,
+        wait: bool = False,
+    ) -> dict[str, Any] | None:
+        """Dev workbench HITL — back-compat wrapper over ``refine_agent(agent="dev")``."""
+        return await self.refine_agent(
+            run_id, agent="dev", ticket_id=ticket_id, feedback=feedback, wait=wait
+        )
+
+    async def set_pr_strategy(self, run_id: str, strategy: str) -> None:
+        """Patch the run's PR-packaging strategy in place (F7) without advancing the graph — used
+        by the spec-approval gate toggle. Safe while paused at the spec_review interrupt (mirrors
+        ``refine_ticket``'s in-place patch); the gate is re-surfaced by ``get_run``."""
+        if strategy not in ("per_story", "single"):
+            return
+        with contextlib.suppress(Exception):  # best-effort — never block the approve flow
+            await self._graph.aupdate_state(self._config(run_id), {"pr_strategy": strategy})
+
+    async def build_from_spec(
+        self,
+        run_id: str,
+        *,
+        story_selection: list[str] | None = None,
+    ) -> dict[str, Any] | None:
+        """Dev workbench: start (or restart) story building for a run that has a spec but no stories.
+
+        Works for two cases:
+        - pm_only run that already completed (merged without building) — re-enters the graph at
+          ``rfc`` so ``_route_after_rfc`` routes to ``plan_stories``.
+        - pm_only run still interrupted at pm_publish — this path should not be needed (use
+          resume_run), but is safe to call anyway.
+
+        ``story_selection`` is an optional list of ticket IDs to build; None means all tickets.
+        """
+        current = await self.get_run(run_id)
+        if current is None:
+            return None
+        config = self._config(run_id)
+        patch: dict[str, Any] = {
+            "stories": {},
+            "story_order": [],
+            "current_story": "",
+            "status": "running",
+        }
+        if story_selection is not None:
+            pm_dict = dict(current.get("pm") or {})
+            pm_dict["story_selection"] = story_selection
+            pm_state = PMState.model_validate(pm_dict)
+            patch["pm"] = pm_state
+        # Re-enter after rfc: _route_after_rfc returns "plan_stories" for any run
+        # where next_action != "rfc" (which is always the case here).
+        await self._graph.aupdate_state(config, patch, as_node="rfc")
+        return await self._drive(run_id, config, False)
+
     async def refine_ticket(
         self, run_id: str, *, ticket_id: str, feedback: str
     ) -> dict[str, Any] | None:
@@ -356,7 +524,9 @@ class Runner:
         self, run_id: str, config: dict[str, Any], wait: bool
     ) -> dict[str, Any] | None:
         async def _resume() -> None:
+            logger.info("[runner] _drive start run=%s", run_id[:8])
             await self._graph.ainvoke(None, config=config)
+            logger.info("[runner] _drive done run=%s", run_id[:8])
             await self._sync_status(run_id)
 
         if wait:
@@ -422,6 +592,13 @@ class Runner:
         # working, making it look like the click had no effect and tempting users to click again.
         active_task = self._run_tasks.get(run_id)
         task_is_running = active_task is not None and not active_task.done()
+        # Live-progress signals for the cockpit (decision #33 follow-up): which node(s) the graph
+        # is about to run / running, and whether an in-process background task is actually driving
+        # this run. The web layer combines these with the AgentTask table to distinguish a stage
+        # that is genuinely *running* from one that is *stalled* (e.g. the server restarted mid-run,
+        # so an AgentTask is stuck in_progress but no task is alive to advance it).
+        state["_next_nodes"] = list(getattr(snapshot, "next", None) or ())
+        state["_task_running"] = task_is_running
         if snapshot.interrupts and not task_is_running:
             payload = snapshot.interrupts[0].value
             # Which story (if any) is paused — so the UI surfaces the gate on the right card.

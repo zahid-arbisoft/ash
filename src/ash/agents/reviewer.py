@@ -1,11 +1,11 @@
 """Reviewer agent — the checker half of maker/checker (plan §4a, §10.4).
 
-Reviews the change the Coding agent produced **in depth, in a single pass** (to avoid review
+Reviews the change the Dev agent produced **in depth, in a single pass** (to avoid review
 cycles), tags every finding by severity, and renders a verdict. When a PR exists it posts the review
 via `gh`; when the project's autonomy policy allows auto-merge *and* the change is approved with no
 blocking findings, it merges — otherwise the merge waits for a human (ApprovalGate).
 
-This is a different agent instance from Coding (separate prompt/model allowed), never the writer.
+This is a different agent instance from Dev (separate prompt/model allowed), never the writer.
 """
 
 from __future__ import annotations
@@ -50,21 +50,35 @@ class ReviewerAgent(BaseAgent):
 
     async def run(self, state: WorkflowState) -> dict[str, Any]:
         self._reset_usage()
+        # Idempotency: if reviewer already produced a review (no error, no feedback), pass through
+        # so retrigger-fixer doesn't re-run review (and re-fire the merge-approval interrupt).
+        if state.reviewer.review and not state.reviewer.error and not state.reviewer.feedback and not self._extra_instructions(state):
+            logger.info("[reviewer] review already exists, passing through (retrigger of later step)")
+            return {}
         skip = await self._trigger_gate(state)
         if skip is not None:
             return skip
 
-        change = state.coding.change
+        change = state.dev.change
         if change is None or not change.edits:
             return {"reviewer": {"note": "skipped: no code change to review"}}
 
-        review = await self._review(state.brief(max_chars=self.settings.brief_max_chars), change)
+        # Per-agent HITL feedback + optional custom prompt (decision #33), consumed once.
+        extra = "\n\n".join(
+            p for p in (
+                (state.reviewer.feedback or "").strip(),
+                self._extra_instructions(state),
+            ) if p
+        )
+        review = await self._review(
+            state.brief(max_chars=self.settings.brief_max_chars), change, extra=extra
+        )
         verdict = review.verdict.value
         blocking = review.blocking()
 
         project = load_project(state.project)
         gate = ApprovalGate(project.autonomy)
-        pr_url = state.coding.pr_url
+        pr_url = state.dev.pr_url
 
         comment_url = await self._post_review(pr_url, review) if pr_url else None
 
@@ -116,10 +130,11 @@ class ReviewerAgent(BaseAgent):
                 "merged": merged,
                 "note": "; ".join(notes),
                 "tokens": dict(self._usage),
+                "feedback": None,  # consumed this pass
             }
         }
 
-    async def _review(self, brief: str, change: CodeChange) -> CodeReview:
+    async def _review(self, brief: str, change: CodeChange, *, extra: str = "") -> CodeReview:
         total_cap = self.settings.files_max_chars
         # Per-file cap is the smaller of a fixed 4000 and an even split of the total budget,
         # so a change touching many files stays within the total (bounds small-context models).
@@ -131,14 +146,16 @@ class ReviewerAgent(BaseAgent):
             excerpt = body[:per_file] + ("\n… (truncated)" if truncated else "")
             snippets.append(f"### {e.path} ({e.action.value})\n```\n{excerpt}\n```")
         files = "\n\n".join(snippets)
+        extra_section = f"\n## Additional instructions\n{extra}\n\n" if extra else ""
         user = (
             f"## Work brief / spec\n{brief}\n\n"
             f"## Author's summary\n{change.summary}\n\n"
             f"## Author's test note\n{change.tests_note or '(none)'}\n\n"
+            f"{extra_section}"
             f"## Changed files\n{files}\n\n"
             "Review the change and return your findings and verdict."
         )
-        return await self.generate(CodeReview, system=_SYSTEM, user=user)
+        return await self.generate(CodeReview, system=_SYSTEM, user=user, context=brief, code=files)
 
     async def _post_review(self, pr_url: str | None, review: CodeReview) -> str | None:
         if not pr_url:

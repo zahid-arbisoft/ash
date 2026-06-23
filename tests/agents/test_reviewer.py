@@ -4,7 +4,7 @@ from pydantic import BaseModel
 
 from ash.agents.reviewer import ReviewerAgent
 from ash.config.settings import Autonomy, ProjectConfig, Settings, WorkTarget
-from ash.graph.state import CodingState, WorkflowState
+from ash.graph.state import DevState, WorkflowState
 from ash.schemas import (
     CodeChange,
     CodeReview,
@@ -47,7 +47,7 @@ def _change() -> CodeChange:
 
 def _state_with_change(pr_url=None) -> WorkflowState:
     state = WorkflowState(run_id="r1", project="plane", item_id="42")
-    state.coding = CodingState(change=_change(), pr_url=pr_url, files_written=["app/api.py"])
+    state.dev = DevState(change=_change(), pr_url=pr_url, files_written=["app/api.py"])
     return state
 
 

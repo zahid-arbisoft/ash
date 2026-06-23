@@ -18,6 +18,7 @@ from ash.admin.views import (
     RunRecordAdmin,
     SpecRecordAdmin,
     StoryRecordAdmin,
+    WorkflowAdmin,
 )
 from ash.config.settings import Settings
 
@@ -37,5 +38,6 @@ def setup_admin(app: FastAPI, engine: AsyncEngine, settings: Settings) -> Admin:
     admin.add_view(AgentRunMetricAdmin)
     admin.add_view(AgentPolicyRecordAdmin)
     admin.add_view(AgentLLMExchangeAdmin)
+    admin.add_view(WorkflowAdmin)
     admin.add_view(AdminUserAdmin)
     return admin

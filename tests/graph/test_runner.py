@@ -37,7 +37,7 @@ class PMPublishStub:
 def _runner():
     agents = {
         n: StubAgent(n)
-        for n in ("intake", "pm", "rfc", "research", "coding", "reviewer", "fixer")
+        for n in ("intake", "pm", "rfc", "research", "dev", "reviewer", "fixer")
     }
     agents["pm_publish"] = PMPublishStub()
     return Runner(graph=build_graph(agents, checkpointer=MemorySaver()))
@@ -87,15 +87,15 @@ def test_first_failed_story_picks_earliest():
         "story_order": ["T1", "T2"],
         "stories": {
             "T1": {"ticket_id": "T1", "status": "completed"},
-            "T2": {"ticket_id": "T2", "status": "failed", "failed_step": "coding"},
+            "T2": {"ticket_id": "T2", "status": "failed", "failed_step": "dev"},
         },
     }
-    assert runner.first_failed_story(state) == ("T2", "coding")
+    assert runner.first_failed_story(state) == ("T2", "dev")
 
 
 async def test_retry_reruns_failed_story_to_completion():
     flaky = FlakyAgent("research")
-    agents = {n: StubAgent(n) for n in ("intake", "pm", "rfc", "coding", "reviewer", "fixer")}
+    agents = {n: StubAgent(n) for n in ("intake", "pm", "rfc", "dev", "reviewer", "fixer")}
     agents["research"] = flaky
     agents["pm_publish"] = PMPublishStub()
     runner = Runner(graph=build_graph(agents, checkpointer=MemorySaver()))
@@ -119,31 +119,118 @@ async def test_retry_reruns_failed_story_to_completion():
 
 async def test_regenerate_specific_story_step_reruns_only_that_story():
     # F4: explicit per-story regenerate re-runs the chosen story's step (here: coding).
-    counts = {"coding": 0}
+    counts = {"dev": 0}
 
     class CountingCoding:
-        name = "coding"
+        name = "dev"
 
         async def run(self, state):
-            counts["coding"] += 1
-            return {"coding": {"note": "built", "pr_url": "https://gh/pr/1"}}
+            counts["dev"] += 1
+            return {"dev": {"note": "built", "pr_url": "https://gh/pr/1"}}
 
     agents = {n: StubAgent(n) for n in ("intake", "pm", "rfc", "research", "reviewer", "fixer")}
-    agents["coding"] = CountingCoding()
+    agents["dev"] = CountingCoding()
     agents["pm_publish"] = PMPublishStub()
     runner = Runner(graph=build_graph(agents, checkpointer=MemorySaver()))
 
     run_id = await runner.start_run(project="plane", item_id="9", wait=True)
     done = await runner.get_run(run_id)
     assert done["status"] == "completed"
-    assert counts["coding"] == 1
+    assert counts["dev"] == 1
 
     # Regenerate the single story's coding step → coding runs again, no new run created.
-    state = await runner.retry_run(run_id, ticket_id="_main", from_step="coding", wait=True)
+    state = await runner.retry_run(run_id, ticket_id="_main", from_step="dev", wait=True)
     assert state["status"] == "completed"
-    assert counts["coding"] == 2
+    assert counts["dev"] == 2
     # PR is preserved on the story (no duplicate identity).
     assert state["stories"]["_main"]["pr_url"] == "https://gh/pr/1"
+
+
+async def test_refine_story_code_reruns_coding_with_feedback_same_pr():
+    """Dev HITL: refine_story_code re-runs the story's coding step, threading the human feedback
+    into DevState.feedback and preserving the branch/PR (no duplicate)."""
+    seen: dict[str, object] = {"calls": 0, "feedback": None}
+
+    class FeedbackCoding:
+        name = "dev"
+
+        async def run(self, state):
+            seen["calls"] += 1  # type: ignore[operator]
+            seen["feedback"] = state.dev.feedback
+            return {
+                "dev": {
+                    "note": "built",
+                    "pr_url": "https://gh/pr/1",
+                    "branch": "agent/_main",
+                    "feedback": None,  # consumed
+                }
+            }
+
+    agents = {n: StubAgent(n) for n in ("intake", "pm", "rfc", "research", "reviewer", "fixer")}
+    agents["dev"] = FeedbackCoding()
+    agents["pm_publish"] = PMPublishStub()
+    runner = Runner(graph=build_graph(agents, checkpointer=MemorySaver()))
+
+    run_id = await runner.start_run(project="plane", item_id="9", wait=True)
+    done = await runner.get_run(run_id)
+    assert done["status"] == "completed"
+    assert seen["calls"] == 1
+    assert seen["feedback"] is None  # first build had no feedback
+
+    state = await runner.refine_story_code(
+        run_id, ticket_id="_main", feedback="add error handling", wait=True
+    )
+    assert state["status"] == "completed"
+    assert seen["calls"] == 2  # coding re-ran
+    assert seen["feedback"] == "add error handling"  # feedback reached the coding agent
+    # Same PR/branch preserved (no duplicate), feedback cleared after consumption.
+    assert state["stories"]["_main"]["pr_url"] == "https://gh/pr/1"
+    assert state["stories"]["_main"]["dev"]["feedback"] is None
+
+
+async def test_refine_story_code_unknown_ticket_is_noop():
+    runner = _runner()
+    run_id = await runner.start_run(project="plane", item_id="1", wait=True)
+    state = await runner.refine_story_code(run_id, ticket_id="NOPE", feedback="x", wait=True)
+    assert state is not None  # returns current state unchanged, no crash
+
+
+async def test_retrigger_agent_threads_custom_prompt_and_node_clears_it():
+    """retrigger_agent seeds custom_prompts[agent]; the agent sees it and the node wrapper
+    clears it after the run (consume-once, decision #33)."""
+    seen: dict[str, object] = {"calls": 0, "custom": None}
+
+    class RecordingDev:
+        name = "dev"
+
+        async def run(self, state):
+            seen["calls"] += 1  # type: ignore[operator]
+            seen["custom"] = state.custom_prompts.get("dev")
+            return {"dev": {"note": "built", "pr_url": "https://gh/pr/1", "branch": "agent/_main"}}
+
+    agents = {n: StubAgent(n) for n in ("intake", "pm", "rfc", "research", "reviewer", "fixer")}
+    agents["dev"] = RecordingDev()
+    agents["pm_publish"] = PMPublishStub()
+    runner = Runner(graph=build_graph(agents, checkpointer=MemorySaver()))
+
+    run_id = await runner.start_run(project="plane", item_id="9", wait=True)
+    assert seen["custom"] is None  # first build: no custom prompt
+
+    state = await runner.retrigger_agent(
+        run_id, agent="dev", ticket_id="_main", custom_prompt="use the repository pattern", wait=True
+    )
+    assert state["status"] == "completed"
+    assert seen["calls"] == 2  # dev re-ran
+    assert seen["custom"] == "use the repository pattern"  # custom prompt reached the agent
+    # The node wrapper cleared the consumed custom prompt from run state.
+    assert (state.get("custom_prompts") or {}).get("dev") is None
+
+
+async def test_refine_agent_unknown_agent_is_noop():
+    runner = _runner()
+    run_id = await runner.start_run(project="plane", item_id="1", wait=True)
+    state = await runner.refine_agent(run_id, agent="nope", feedback="x", wait=True)
+    assert state is not None  # unknown agent → current state unchanged, no crash
 
 
 async def test_stop_run_cancels_and_resume_completes():
@@ -152,7 +239,7 @@ async def test_stop_run_cancels_and_resume_completes():
     import asyncio
 
     class BlockOnceCoding:
-        name = "coding"
+        name = "dev"
 
         def __init__(self) -> None:
             self.calls = 0
@@ -163,11 +250,11 @@ async def test_stop_run_cancels_and_resume_completes():
             if self.calls == 1:
                 self.started.set()
                 await asyncio.sleep(3600)  # block until cancelled
-            return {"coding": {"note": "done", "pr_url": "https://gh/pr/1"}}
+            return {"dev": {"note": "done", "pr_url": "https://gh/pr/1"}}
 
     coding = BlockOnceCoding()
     agents = {n: StubAgent(n) for n in ("intake", "pm", "rfc", "research", "reviewer", "fixer")}
-    agents["coding"] = coding
+    agents["dev"] = coding
     agents["pm_publish"] = PMPublishStub()
     runner = Runner(graph=build_graph(agents, checkpointer=MemorySaver()))
 
@@ -183,7 +270,7 @@ async def test_stop_run_cancels_and_resume_completes():
 
 
 async def test_get_run_state_is_json_serializable_with_spec():
-    agents = {n: StubAgent(n) for n in ("intake", "rfc", "research", "coding", "reviewer", "fixer")}
+    agents = {n: StubAgent(n) for n in ("intake", "rfc", "research", "dev", "reviewer", "fixer")}
     agents["pm"] = SpecPM()
     agents["pm_publish"] = PMPublishStub()
     runner = Runner(graph=build_graph(agents, checkpointer=MemorySaver()))

@@ -1,114 +1,111 @@
 {% extends "base.html" %}
-{% block title %}{% if pm_mode %}New PM run{% else %}New run{% endif %}{% endblock %}
-{% block breadcrumb %}{% if pm_mode %}<a href="/ui/pm-workbench" class="hover:text-fg">PM workbench</a> / New{% else %}<a href="/ui/runs" class="hover:text-fg">Runs</a> / New{% endif %}{% endblock %}
+{% block title %}New run{% endblock %}
+{% block breadcrumb %}<a href="/ui/runs" class="hover:text-fg">Runs</a> / New{% endblock %}
 {% block body %}
+<div class="max-w-3xl">
+  <h1 class="text-xl font-semibold mb-1">Start a run</h1>
+  <p class="text-sm text-muted mb-5">Pick a source, optionally tune the destination, and start. Every
+    agent waits for you to trigger it in the run cockpit.</p>
 
-<h1 class="text-xl font-semibold mb-1">{% if pm_mode %}Start a PM run{% else %}Start a run{% endif %}</h1>
-{% if pm_mode %}<p class="text-sm text-muted mb-5">PM generates a spec and stops at the workbench — review, iterate on stories, then optionally build.</p>{% endif %}
+  <form method="post" action="/ui/runs" enctype="multipart/form-data"
+        x-data="{ adv: false, source: '', item: '', smode: 'single' }" class="space-y-5">
 
-{% if not sources %}
-<div class="border border-ok/30 bg-ok/5 rounded-xl p-4 mb-4 text-sm leading-relaxed">
-  <h3 class="text-ok font-semibold mb-1">No issue source connectors yet</h3>
-  <p class="text-muted mb-2">To pull an issue from GitHub/Jira/Plane you need a connector, or upload a spec file instead.</p>
-  <p class="text-fg font-medium">Path A — add a connector (recommended)</p>
-  <ol class="list-decimal list-inside text-muted space-y-0.5 mb-2">
-    <li>Go to <a href="/admin/connector/create" target="_blank" class="text-accent hover:underline">Admin → Connectors</a>.</li>
-    <li>Kind = <code class="text-ok">github</code>, Secret = your token, Config = <code class="text-ok">{"repo": "owner/name"}</code>.</li>
-    <li>Check <strong>Is source</strong> + <strong>Enabled</strong>, save, return here.</li>
-  </ol>
-  <p class="text-muted border-t border-ok/20 pt-2">
-    <span class="text-fg font-medium">Path B</span> — leave the source blank to use
-    <code class="text-ok">issues.source_repo</code> from the project YAML + <code class="text-ok">GITHUB_TOKEN</code>.
-  </p>
+    {# ── SOURCE ── #}
+    <section class="bg-surface border border-border rounded-xl p-5">
+      <h2 class="text-sm font-semibold text-fg mb-4 flex items-center gap-2"><span class="text-accent">①</span> Source</h2>
+
+      <div class="grid sm:grid-cols-2 gap-4">
+        <label class="text-xs text-muted flex flex-col gap-1">Project <span class="text-danger">*</span>
+          <select name="project" required class="text-sm rounded-lg border border-border bg-bg px-2 h-9">
+            {% for p in projects %}<option value="{{ p }}">{{ p }}</option>{% endfor %}
+          </select>
+        </label>
+
+        <label class="text-xs text-muted flex flex-col gap-1">Issue source (connector)
+          <select name="integration_id" x-model="source" class="text-sm rounded-lg border border-border bg-bg px-2 h-9">
+            <option value="">— none / attachments only —</option>
+            {% for c in sources %}<option value="{{ c.id }}">{{ c.name }} ({{ c.kind.value }})</option>{% endfor %}
+          </select>
+        </label>
+      </div>
+
+      <label class="text-xs text-muted flex flex-col gap-1 mt-4">Workflow
+        <select name="workflow_id" class="text-sm rounded-lg border border-border bg-bg px-2 h-9">
+          <option value="">— built-in default flow (all agents, manual) —</option>
+          {% for w in workflows %}
+          <option value="{{ w.id }}" {{ 'selected' if w.id == default_workflow_id else '' }}>
+            {{ w.name }}{{ ' · default' if w.is_default else '' }}
+          </option>
+          {% endfor %}
+        </select>
+        <span class="text-[11px] text-muted/70">Sets each agent's enable/trigger for this run. Agents-page settings still override it.</span>
+      </label>
+
+      <label class="text-xs text-muted flex flex-col gap-1 mt-4">Item ID — issue # / Jira key / Plane ID
+        <input name="item_id" x-model="item" placeholder="e.g. 9213 or ENG-42"
+               class="text-sm rounded-lg border border-border bg-bg px-2 h-9">
+      </label>
+      <p x-show="!source && item.trim()" x-cloak class="text-[11px] text-warn mt-1">
+        No connector selected — falls back to the project YAML's issue source + GITHUB_TOKEN.
+      </p>
+
+      <label class="text-xs text-muted flex flex-col gap-1 mt-4">Spec / requirements files (optional)
+        <input name="attachments" type="file" multiple
+               class="text-sm rounded-lg border border-border bg-bg px-2 py-1.5">
+        <span class="text-[11px] text-muted/70">pdf · docx · md · txt</span>
+      </label>
+
+      <label class="text-xs text-muted flex flex-col gap-1 mt-4">Custom prompt (optional)
+        <textarea name="run_prompt" rows="3"
+                  placeholder="Standing instructions threaded into every agent this run — e.g. 'follow the repository pattern; target Python 3.12'."
+                  class="text-sm rounded-lg border border-border bg-bg p-2"></textarea>
+      </label>
+    </section>
+
+    {# ── DESTINATION & OPTIONS (collapsed) ── #}
+    <section class="bg-surface border border-border rounded-xl">
+      <button type="button" @click="adv = !adv"
+              class="w-full flex items-center justify-between px-5 py-3 text-sm font-semibold">
+        <span class="flex items-center gap-2"><span class="text-accent">②</span> Destination &amp; options</span>
+        <span class="text-muted text-xs" x-text="adv ? 'hide' : 'show'"></span>
+      </button>
+      <div x-show="adv" x-cloak class="px-5 pb-5 space-y-4 border-t border-border pt-4">
+        <label class="text-xs text-muted flex flex-col gap-1">Push tickets to (task sink)
+          <select name="task_sink_id" class="text-sm rounded-lg border border-border bg-bg px-2 h-9">
+            <option value="">— admin default (or local file board) —</option>
+            {% for s in sinks %}<option value="{{ s.id }}">{{ s.name }} ({{ s.kind.value }}){{ ' · default' if s.is_default_sink else '' }}</option>{% endfor %}
+          </select>
+        </label>
+
+        <div class="grid sm:grid-cols-2 gap-4">
+          <label class="text-xs text-muted flex flex-col gap-1">Intake mode
+            <select name="intake_mode" class="text-sm rounded-lg border border-border bg-bg px-2 h-9">
+              {% for m in modes %}<option value="{{ m }}">{{ m }}</option>{% endfor %}
+            </select>
+          </label>
+          <fieldset class="text-xs text-muted">
+            <legend class="mb-1">Stories</legend>
+            <label class="flex items-center gap-2 mb-1"><input type="radio" name="story_mode" value="single" x-model="smode" checked> Single story (one PR)</label>
+            <label class="flex items-center gap-2"><input type="radio" name="story_mode" value="multiple" x-model="smode"> Multiple stories</label>
+          </fieldset>
+        </div>
+
+        {# PR packaging — only meaningful for multi-story runs (F7) #}
+        <fieldset class="text-xs text-muted" x-show="smode === 'multiple'" x-cloak>
+          <legend class="mb-1">PR packaging</legend>
+          <label class="flex items-center gap-2 mb-1"><input type="radio" name="pr_strategy" value="per_story" checked> One PR per story</label>
+          <label class="flex items-center gap-2"><input type="radio" name="pr_strategy" value="single"> One combined PR for all stories (shared branch)</label>
+        </fieldset>
+        <p class="text-[11px] text-muted/70">
+          raw_to_spec — PM turns requirements into a spec + tickets · spec_ready — PM extracts tickets from a pre-written spec · raw_to_dev — skip PM, straight to the build team.
+        </p>
+      </div>
+    </section>
+
+    <div class="flex items-center gap-3">
+      <button type="submit" class="bg-accent text-bg font-semibold text-sm rounded-lg px-5 h-10 hover:brightness-110">Start run</button>
+      <a href="/ui/runs" class="text-sm text-muted hover:text-fg">Cancel</a>
+    </div>
+  </form>
 </div>
-{% endif %}
-
-<form method="post" action="/ui/runs" enctype="multipart/form-data"
-      x-data="{ source:'', item:'' }"
-      class="bg-surface border border-border rounded-xl p-5 max-w-2xl space-y-4">
-
-  {% if pm_mode %}<input type="hidden" name="pm_only" value="true">{% endif %}
-  {% macro field_label(text) %}<label class="block text-sm text-muted mb-1">{{ text }}</label>{% endmacro %}
-  {% set field = "w-full bg-bg border border-border rounded-lg px-3 h-10 text-sm outline-none focus:border-accent" %}
-
-  <div>
-    {{ field_label("Project") }}
-    <select name="project" required class="{{ field }} !w-full">
-      {% for p in projects %}<option value="{{ p }}">{{ p }}</option>{% endfor %}
-    </select>
-  </div>
-
-  <div>
-    {{ field_label("Issue source (connector)") }}
-    <select name="integration_id" x-model="source" class="{{ field }} !w-full">
-      <option value="">— none / attachments only —</option>
-      {% for c in sources %}<option value="{{ c.id }}">{{ c.name }} ({{ c.kind.value }})</option>{% endfor %}
-    </select>
-  </div>
-
-  <div>
-    {{ field_label("Item ID — issue number / Jira key / Plane ID (blank if uploading files)") }}
-    <input name="item_id" x-model="item" placeholder="e.g. 9213 or ENG-42" class="{{ field }}">
-  </div>
-
-  <div x-show="!source && item.trim()" x-cloak
-       class="border border-warn/40 bg-warn/5 rounded-lg p-3 text-sm text-warn leading-relaxed">
-    <strong>No connector selected.</strong> With an item ID but no connector, ASH falls back to the
-    project YAML's <code>issues.source_repo</code> + <code>GITHUB_TOKEN</code>. If neither is set the
-    run fails at intake — <a href="/admin/connector/create" target="_blank" class="underline">add a connector</a>
-    or leave the item ID blank and upload a file.
-  </div>
-
-  <div>
-    {{ field_label("Spec / requirements files (optional) — pdf · docx · md · txt") }}
-    <input name="attachments" type="file" multiple class="{{ field }} !h-auto py-2">
-  </div>
-
-  <div>
-    {{ field_label("Push tickets to (task sink)") }}
-    <select name="task_sink_id" class="{{ field }} !w-full">
-      <option value="">— admin default (or local file board) —</option>
-      {% for s in sinks %}<option value="{{ s.id }}">{{ s.name }} ({{ s.kind.value }}){{ ' · default' if s.is_default_sink else '' }}</option>{% endfor %}
-    </select>
-  </div>
-
-  <div>
-    {{ field_label("Stories") }}
-    <div class="flex gap-2">
-      <label class="flex-1 flex items-center gap-2 border border-border rounded-lg px-3 h-10 text-sm cursor-pointer has-[:checked]:border-accent has-[:checked]:bg-accent/10">
-        <input type="radio" name="story_mode" value="single" checked>
-        <span><span class="font-medium">Single story</span> <span class="text-muted">(default — one PR)</span></span>
-      </label>
-      <label class="flex-1 flex items-center gap-2 border border-border rounded-lg px-3 h-10 text-sm cursor-pointer has-[:checked]:border-accent has-[:checked]:bg-accent/10">
-        <input type="radio" name="story_mode" value="multiple">
-        <span><span class="font-medium">Multiple stories</span> <span class="text-muted">(one PR each)</span></span>
-      </label>
-    </div>
-    <p class="text-xs text-muted mt-1 leading-relaxed">
-      <span class="text-fg">Single</span> — PM produces one story; the build team ships one PR.
-      <span class="text-fg">Multiple</span> — PM decomposes the work; each story is built one by one
-      into its own PR (you choose which stories at the review gate).
-    </p>
-  </div>
-
-  <div>
-    {{ field_label("Intake mode") }}
-    <select name="intake_mode" class="{{ field }} !w-full">
-      {% for m in modes %}<option value="{{ m }}">{{ m }}</option>{% endfor %}
-    </select>
-    <div class="text-xs text-muted leading-relaxed mt-2 space-y-1">
-      <p><span class="text-fg font-medium">raw_to_spec</span> — PM turns raw requirements into a full spec + tickets; you review before push.</p>
-      <p><span class="text-fg font-medium">spec_ready</span> — PM extracts tickets from a pre-written spec.</p>
-      <p><span class="text-fg font-medium">raw_to_dev</span> — PM skipped; raw issue goes straight to the build team.</p>
-    </div>
-  </div>
-
-  <div class="pt-2">
-    <button type="submit"
-            class="bg-accent text-bg font-semibold text-sm rounded-lg px-5 h-10 hover:brightness-110">
-      {% if pm_mode %}Start PM run{% else %}Start run{% endif %}
-    </button>
-  </div>
-</form>
-
 {% endblock %}

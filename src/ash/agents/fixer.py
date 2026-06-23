@@ -1,7 +1,7 @@
 """Fixer agent — the Dev agent in "fix mode" (plan §10.5).
 
 When the Reviewer requests changes, the Fixer addresses the blocking findings on the SAME branch and
-worktree the Coding agent used, commits, pushes (updating the PR), and refreshes the PR description.
+worktree the Dev agent used, commits, pushes (updating the PR), and refreshes the PR description.
 Bounded by `MAX_FIX_ITERATIONS` so the review↔fix loop can never run unbounded.
 """
 
@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from ash.agents.base import BaseAgent
-from ash.agents.coding import apply_change
+from ash.agents.dev import apply_change
 from ash.clients import pr as pr_client
 from ash.clients.git_repo import RepoWorkspace
 from ash.config.settings import load_project
@@ -49,11 +49,11 @@ class FixerAgent(BaseAgent):
         ):
             return {"fixer": {"note": "skipped: review approved, nothing to fix"}}
 
-        change = state.coding.change
-        # Prefer Research's worktree; fall back to the one Coding recorded (set when Research
-        # was disabled/skipped and Coding created the worktree itself).
-        wt = state.research.worktree_path or state.coding.worktree_path
-        branch = state.research.branch or state.coding.branch
+        change = state.dev.change
+        # Prefer Research's worktree; fall back to the one Dev recorded (set when Research
+        # was disabled/skipped and Dev created the worktree itself).
+        wt = state.research.worktree_path or state.dev.worktree_path
+        branch = state.research.branch or state.dev.branch
         if change is None or wt is None or branch is None:
             return {"fixer": {"note": "skipped: no worktree/change available to fix"}}
 
@@ -65,9 +65,19 @@ class FixerAgent(BaseAgent):
         ws = RepoWorkspace(work, project.runtime_dir / "worktrees",
                            github_token=self.settings.github_token)
 
-        fix = await self._fix(state.brief(max_chars=self.settings.brief_max_chars), change, review)
+        # Per-agent HITL feedback + optional custom prompt (decision #33), consumed once.
+        extra = "\n\n".join(
+            p for p in (
+                (state.fixer.feedback or "").strip(),
+                self._extra_instructions(state),
+            ) if p
+        )
+        fix = await self._fix(
+            state.brief(max_chars=self.settings.brief_max_chars), change, review, extra=extra
+        )
         if not fix.edits:
-            return {"fixer": {"change": fix, "note": "no fix edits produced; needs human"}}
+            return {"fixer": {"change": fix, "note": "no fix edits produced; needs human",
+                              "feedback": None}}
 
         written = await asyncio.to_thread(apply_change, wt_path, fix)
         prefix = f"#{state.item_id} " if state.item_id and state.item_id != "upload" else ""
@@ -76,7 +86,7 @@ class FixerAgent(BaseAgent):
         )
         await asyncio.to_thread(ws.push_branch, wt_path, branch, force=True)
 
-        pr_url = state.coding.pr_url
+        pr_url = state.dev.pr_url
         if pr_url:
             await self._refresh_pr_body(pr_url, state, fix, review)
 
@@ -89,10 +99,13 @@ class FixerAgent(BaseAgent):
                 "pr_url": pr_url,
                 "note": f"addressed {addressed} finding(s); PR updated",
                 "tokens": dict(self._usage),
+                "feedback": None,  # consumed this pass
             }
         }
 
-    async def _fix(self, brief: str, change: CodeChange, review: CodeReview) -> CodeChange:
+    async def _fix(
+        self, brief: str, change: CodeChange, review: CodeReview, *, extra: str = ""
+    ) -> CodeChange:
         cap = self.settings.files_max_chars
         # Per-file cap = total budget split across the edits, so one huge file can't crowd out
         # the others. Bounds the prompt for small-context models (was previously uncapped).
@@ -110,20 +123,24 @@ class FixerAgent(BaseAgent):
             + (f" (suggestion: {f.suggestion})" if f.suggestion else "")
             for f in review.findings
         )
+        extra_section = f"## Additional instructions\n{extra}\n\n" if extra else ""
         user = (
             f"## Work brief / spec\n{brief}\n\n"
             f"## Current changed files\n{current}\n\n"
             f"## Reviewer findings to address\n{findings}\n\n"
+            f"{extra_section}"
             "Produce the corrected full file contents that resolve these findings."
         )
-        return await self.generate(CodeChange, system=_SYSTEM, user=user)
+        return await self.generate(
+            CodeChange, system=_SYSTEM, user=user, context=brief, code=current
+        )
 
     async def _refresh_pr_body(
         self, pr_url: str, state: WorkflowState, fix: CodeChange, review: CodeReview
     ) -> None:
         body = (
             f"Implements item {state.item_id} — {state.issue_url}\n\n"
-            f"{state.coding.change.summary if state.coding.change else ''}\n\n"
+            f"{state.dev.change.summary if state.dev.change else ''}\n\n"
             f"**Review fixes:** {fix.summary}\n\n"
             f"**Addressed:** {len(review.findings)} finding(s) from the Reviewer agent.\n\n"
             f"_Updated by the ASH Fixer agent._"

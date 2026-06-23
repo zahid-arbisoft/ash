@@ -61,7 +61,7 @@ def _build(body: str):
         "pm_publish": PMPublishNoop(),
         "rfc": Noop("rfc"),
         "research": Noop("research"),
-        "coding": Noop("coding"),
+        "dev": Noop("dev"),
         "reviewer": Noop("reviewer"),
         "fixer": Noop("fixer"),
     }
@@ -119,7 +119,7 @@ async def test_intake_error_skips_pm_and_fails_run():
         "pm_publish": PMPublishNoop(),
         "rfc": Noop("rfc"),
         "research": Noop("research"),
-        "coding": Noop("coding"),
+        "dev": Noop("dev"),
         "reviewer": Noop("reviewer"),
         "fixer": Noop("fixer"),
     }

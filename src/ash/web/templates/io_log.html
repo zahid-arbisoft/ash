@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block title %}LLM I/O{% endblock %}
+{% block breadcrumb %}
+  {% if back_to %}<a href="{{ back_to }}" class="hover:text-fg">← Run</a> / {% endif %}LLM I/O
+{% endblock %}
+{% block body %}
+<div class="flex flex-wrap items-center gap-3 justify-between mb-4">
+  <div>
+    <h1 class="text-xl font-semibold">LLM I/O{% if run_id %} <span class="font-mono text-base text-muted">{{ run_id[:12] }}</span>{% endif %}</h1>
+    <p class="text-sm text-muted mt-0.5">Every prompt sent to and response received from the model — with the code and context sent, and token sizes.</p>
+  </div>
+  {% if not scoped %}<a href="/ui/runs" class="text-sm text-accent hover:underline">All runs →</a>{% endif %}
+</div>
+
+{# ── phase glossary (what extract / explore / refine / single_call mean) ── #}
+<details class="mb-4 bg-surface border border-border rounded-xl">
+  <summary class="px-4 py-2.5 cursor-pointer text-sm font-medium list-none flex items-center gap-2">
+    <span class="text-muted/60">▸</span> What do the phases mean?
+  </summary>
+  <div class="px-4 pb-3 grid sm:grid-cols-2 gap-2 text-xs">
+    {% for g in phase_glossary %}
+    <div class="flex gap-2">
+      <span class="shrink-0 px-1.5 py-0.5 h-fit rounded bg-elevate text-muted font-mono">{{ g.phase }}</span>
+      <span class="text-muted">{{ g.desc }}</span>
+    </div>
+    {% endfor %}
+  </div>
+</details>
+
+{# ── filter bar (HTMX live filter) ── #}
+<form id="io-filter" hx-get="{{ '/ui/run/' ~ run_id ~ '/io' if scoped else '/ui/io' }}"
+      hx-target="#io-results" hx-swap="innerHTML" hx-trigger="change, keyup delay:300ms from:[name=query]"
+      class="flex flex-wrap items-end gap-2 mb-4 bg-surface border border-border rounded-xl p-3">
+  <label class="text-xs text-muted flex flex-col gap-1">Agent
+    <select name="agent" class="text-sm rounded-lg border border-border bg-bg px-2 h-8">
+      <option value="">all</option>
+      {% for a in agent_options %}<option value="{{ a }}" {{ 'selected' if f_agent==a else '' }}>{{ a }}</option>{% endfor %}
+    </select>
+  </label>
+  <label class="text-xs text-muted flex flex-col gap-1">Story
+    <input name="ticket" value="{{ f_ticket }}" placeholder="ticket id"
+           class="text-sm rounded-lg border border-border bg-bg px-2 h-8 w-28">
+  </label>
+  <label class="text-xs text-muted flex flex-col gap-1">Phase
+    <select name="phase" class="text-sm rounded-lg border border-border bg-bg px-2 h-8">
+      {% for p in ["", "single_call", "explore", "extract", "refine"] %}
+      <option value="{{ p }}" {{ 'selected' if f_phase==p else '' }}>{{ p or "all" }}</option>{% endfor %}
+    </select>
+  </label>
+  <label class="text-xs text-muted flex flex-col gap-1 flex-1 min-w-[10rem]">Search
+    <input name="query" value="{{ f_query }}" placeholder="model / agent / project"
+           class="text-sm rounded-lg border border-border bg-bg px-2 h-8 w-full">
+  </label>
+</form>
+
+<div id="io-results">
+  {% include "_io_log_results.html" %}
+</div>
+{% endblock %}

@@ -35,4 +35,4 @@ def test_per_agent_override(monkeypatch):
 def test_base_url_propagates(monkeypatch):
     monkeypatch.setenv("LLM_BASE_URL", "http://localhost:4000/v1")
     s = _settings()
-    assert s.model_for("coding").base_url == "http://localhost:4000/v1"
+    assert s.model_for("dev").base_url == "http://localhost:4000/v1"

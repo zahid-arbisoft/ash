@@ -24,7 +24,7 @@ class PMPublishStub:
 def _agents():
     agents = {
         n: StubAgent(n)
-        for n in ("intake", "pm", "rfc", "research", "coding", "reviewer", "fixer")
+        for n in ("intake", "pm", "rfc", "research", "dev", "reviewer", "fixer")
     }
     agents["pm_publish"] = PMPublishStub()
     return agents

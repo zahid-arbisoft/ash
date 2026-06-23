@@ -17,7 +17,7 @@ WORKDIR /app
 #    without the real source, so this expensive layer stays cached across code changes.
 COPY pyproject.toml ./
 RUN mkdir -p src/ash && touch src/ash/__init__.py \
-    && pip install --no-cache-dir . \
+    && pip install --no-cache-dir --timeout 120 --retries 5 . \
     && rm -rf src build ./*.egg-info src/*.egg-info
 
 # 2) Editable install of the real package — fast, no downloads (--no-deps), reuses the
@@ -25,6 +25,6 @@ RUN mkdir -p src/ash && touch src/ash/__init__.py \
 COPY . .
 RUN pip install --no-cache-dir --no-deps -e .
 
-EXPOSE 8000
+EXPOSE 9000
 
-CMD ["uvicorn", "ash.api.app:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "ash.api.app:app", "--host", "0.0.0.0", "--port", "9000"]

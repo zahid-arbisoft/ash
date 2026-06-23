@@ -15,35 +15,18 @@ services:
       timeout: 3s
       retries: 10
 
-  chroma:
-    image: chromadb/chroma:latest
-    ports:
-      - "8001:8000"
-    volumes:
-      - ash-chroma:/chroma/chroma
-    healthcheck:
-      test: ["CMD", "bash", "-c", "echo > /dev/tcp/localhost/8000"]
-      interval: 5s
-      timeout: 5s
-      retries: 12
-      start_period: 10s
-
   api:
     build: .
-    command: uvicorn ash.api.app:app --host 0.0.0.0 --port 8000
+    command: uvicorn ash.api.app:app --host 0.0.0.0 --port 9000
     ports:
-      - "8000:8000"
+      - "9000:9000"
     env_file:
       - .env
     environment:
-      # override the default DSNs to reach compose services by name
+      # override the default DSN to reach compose services by name
       POSTGRES_DSN: postgresql://ash:ash@postgres:5432/ash
-      CHROMA_HOST: chroma
-      CHROMA_PORT: 8000   # internal container port; .env has 8001 (host-mapped port)
     depends_on:
       postgres:
-        condition: service_healthy
-      chroma:
         condition: service_healthy
     volumes:
       # bind-mount the whole project so runtime/ (board specs, state, worktrees) is visible on the host
@@ -58,11 +41,6 @@ services:
       #   e.g. LOCAL_REPOS_ROOT=/Users/you/dev  when clones live at /Users/you/dev/plane,
       #   /Users/you/dev/edx/edx-platform, etc.  Both options can coexist; set whichever applies.
       - ${LOCAL_REPOS_ROOT:-/tmp}:${LOCAL_REPOS_ROOT:-/tmp}
-      # Chroma's default embedding function (ONNX all-MiniLM-L6-v2) runs CLIENT-side — i.e. in
-      # THIS container, not the chroma server. Persist its model cache so it's downloaded once.
-      - chroma-onnx:/root/.cache/chroma
 
 volumes:
   ash-postgres:
-  ash-chroma:
-  chroma-onnx:

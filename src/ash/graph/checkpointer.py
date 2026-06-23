@@ -27,7 +27,7 @@ _SERDE = JsonPlusSerializer(
         ("ash.graph.state", "PMState"),
         ("ash.graph.state", "RFCState"),
         ("ash.graph.state", "ResearchState"),
-        ("ash.graph.state", "CodingState"),
+        ("ash.graph.state", "DevState"),
         ("ash.graph.state", "ReviewerState"),
         ("ash.graph.state", "FixerState"),
         ("ash.graph.state", "StoryState"),

@@ -4,7 +4,7 @@ from pydantic import BaseModel
 
 from ash.agents.fixer import FixerAgent
 from ash.config.settings import ProjectConfig, Settings, WorkTarget
-from ash.graph.state import CodingState, ResearchState, ReviewerState, WorkflowState
+from ash.graph.state import DevState, ResearchState, ReviewerState, WorkflowState
 from ash.schemas import (
     CodeChange,
     CodeReview,
@@ -68,7 +68,7 @@ def _review_requesting_changes() -> CodeReview:
 
 def _state(tmp_path) -> WorkflowState:
     state = WorkflowState(run_id="r1", project="plane", item_id="42")
-    state.coding = CodingState(
+    state.dev = DevState(
         change=CodeChange(
             summary="initial",
             edits=[FileEdit(path="app/api.py", action=EditAction.modify, content="x = 1")],

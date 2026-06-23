@@ -8,18 +8,12 @@ from pathlib import Path
 from langchain_core.tools import BaseTool, StructuredTool
 
 from ash.clients import code_intel
-from ash.clients.chroma import VectorStoreClient
 
 
 class CodebaseToolkit:
-    """Sandboxed, read-only search/read over a checked-out worktree.
+    """Sandboxed, read-only search/read over a checked-out worktree."""
 
-    `client` is optional — when None (Chroma unavailable) the search_codebase tool
-    falls back to a grep-based keyword search so the agent still has useful results.
-    """
-
-    def __init__(self, *, client: VectorStoreClient | None, root: Path) -> None:
-        self._client = client
+    def __init__(self, *, root: Path) -> None:
         self._root = root
 
     def get_tools(self) -> list[BaseTool]:
@@ -31,11 +25,7 @@ class CodebaseToolkit:
                 scoped = (root / path).resolve()
                 if str(scoped).startswith(str(root.resolve())) and scoped.is_dir():
                     root = scoped
-            n = max(1, min(max_results, 30))
-            if self._client is not None:
-                results = self._client.search(query, n_results=n)
-                return "\n".join(results) or "(no results)"
-            return _grep_search(root, query, max_results=n)
+            return _grep_search(root, query, max_results=max(1, min(max_results, 30)))
 
         def list_directory(path: str = "", depth: int = 2) -> str:
             """List the directory tree at the given path (relative to repo root).
@@ -79,7 +69,6 @@ class CodebaseToolkit:
                     capture_output=True, text=True, timeout=15, cwd=str(root)
                 )
                 lines = proc.stdout.splitlines()
-                # Make paths relative to repo root for readability
                 rel_lines = []
                 for ln in lines[:60]:
                     try:
@@ -139,7 +128,7 @@ _TEXT_EXTS: frozenset[str] = frozenset(
 
 
 def _grep_search(root: Path, query: str, max_results: int = 15) -> str:
-    """Simple case-insensitive substring search as a Chroma fallback."""
+    """Case-insensitive keyword search across text files in the worktree."""
     terms = [t.lower() for t in query.split() if len(t) > 2]
     if not terms:
         return "(no search terms)"
@@ -159,7 +148,6 @@ def _grep_search(root: Path, query: str, max_results: int = 15) -> str:
             continue
         lower = text.lower()
         if all(t in lower for t in terms):
-            # Return a short snippet around the first match
             idx = lower.find(terms[0])
             snippet = text[max(0, idx - 60): idx + 200].replace("\n", " ")
             rel = p.relative_to(root)

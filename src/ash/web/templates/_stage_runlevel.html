@@ -1,0 +1,181 @@
+{# Run-level stage panel: intake / pm / rfc. Context: run_id, state, selected, stages, triggers. #}
+{% import "_macros.html" as ui %}
+{%- set ns = state.get(selected) or {} -%}
+{%- set st = (stages | selectattr("name","equalto",selected) | list | first) or {"status":"pending"} -%}
+{%- set status = st.status -%}
+
+<div class="bg-surface border border-border rounded-xl p-5">
+  <div class="flex items-center justify-between mb-3">
+    <h2 class="font-semibold flex items-center gap-2">
+      <span class="opacity-70">{{ ui.status_dot(status) }}</span>
+      {{ stage_labels.get(selected, selected) }}
+      {{ ui.status_pill(status) }}
+      {% if selected == "pm" %}
+      {%- set smode = state.get("story_mode", "single") -%}
+      <span class="text-[11px] px-2 py-0.5 rounded-full bg-elevate text-muted border border-border"
+            title="How many stories (PRs) this run will build from the spec">
+        {{ "single story" if smode == "single" else "multiple stories" }}
+      </span>
+      {% if smode != "single" and state.get("pr_strategy") == "single" %}
+      <span class="text-[11px] px-2 py-0.5 rounded-full bg-accent/10 text-accent border border-accent/30"
+            title="All built stories share one branch and produce one combined PR">combined PR</span>
+      {% endif %}
+      {% endif %}
+    </h2>
+    {{ ui.token_chip((state.get("_run_level_tokens") or {}).get(selected, {})) }}
+  </div>
+
+  {# ── awaiting manual trigger ── #}
+  {% if status == "awaiting" and state.get("pending_trigger") == selected %}
+  <div class="border border-accent/30 bg-accent/5 rounded-lg p-4 mb-4">
+    <p class="text-sm text-muted mb-3">This agent is waiting for you to start it.</p>
+    {{ ui.trigger_controls(run_id, selected) }}
+  </div>
+  {% endif %}
+
+  {# ── running ── #}
+  {% if status == "running" %}
+  <div class="border border-warn/30 bg-warn/5 rounded-lg p-3 mb-4 text-sm text-warn flex items-center gap-2">
+    <span class="inline-block w-2 h-2 rounded-full bg-warn animate-pulse"></span>
+    {{ stage_labels.get(selected, selected) }} is running…
+  </div>
+  {% endif %}
+
+  {% if ns.get("error") %}
+  <div class="border border-danger/30 bg-danger/5 rounded-lg p-3 mb-4 text-sm text-danger">{{ ns.error }}</div>
+  {% endif %}
+
+  {# ── INTAKE ── #}
+  {% if selected == "intake" %}
+    {%- set issue = state.get("raw_issue") or {} -%}
+    {% if issue %}
+    <h3 class="font-medium">{{ issue.get("title","(no title)") }}</h3>
+    <pre class="mt-2 text-xs whitespace-pre-wrap text-muted max-h-72 overflow-auto">{{ issue.get("body","") }}</pre>
+    {% else %}
+    <p class="text-sm text-muted">{{ ns.get("note") or "No issue fetched yet." }}</p>
+    {% endif %}
+
+  {# ── PM ── #}
+  {% elif selected == "pm" %}
+    {%- set spec = ns.get("spec") -%}
+    {% if spec %}
+      {%- set epic = spec.get("epic") or {} -%}
+      {%- set tickets = spec.get("tickets") or [] -%}
+      <div class="flex items-start justify-between gap-3">
+        <div>
+          <h3 class="text-lg font-semibold">{{ epic.get("title","") }}</h3>
+          <p class="text-sm text-muted mt-1">{{ epic.get("summary","") }}</p>
+        </div>
+      </div>
+
+      {# spec-level refine / re-trigger — kept at the TOP so it's reachable without scrolling past
+         every ticket (decision #33 follow-up). #}
+      {{ ui.hitl_controls(run_id, "pm") }}
+
+      {# spec review gate #}
+      {% if state.get("pending_review") %}
+      <div class="border border-warn/40 bg-warn/5 rounded-xl p-4 my-4" x-data="{ adv:false }">
+        <h4 class="font-semibold text-warn mb-1">Spec awaiting approval</h4>
+        <p class="text-sm text-muted mb-3">Approve to push tickets and plan stories. Each story builds into its own PR.</p>
+        <form method="post" action="/ui/run/{{ run_id }}/approve">
+          <input type="hidden" name="stage" value="dev">
+          {% if tickets and tickets|length > 1 and state.get("story_mode") != "single" %}
+          <div class="text-xs uppercase tracking-wide text-muted mb-2">Stories to build (uncheck to skip)</div>
+          <div class="space-y-1.5 mb-3">
+            {% for t in tickets %}
+            <label class="flex items-start gap-2 text-sm cursor-pointer">
+              <input type="checkbox" name="stories" value="{{ t.id }}" checked class="mt-1 shrink-0">
+              <span><span class="font-mono text-xs text-accent">{{ t.id }}</span> {{ t.title }}
+                {% if t.needs_research %}<span class="text-[10px] px-1.5 rounded bg-warn/15 text-warn ml-1">spike</span>{% endif %}</span>
+            </label>
+            {% endfor %}
+          </div>
+          {%- set prs = state.get("pr_strategy", "per_story") -%}
+          <div class="text-xs uppercase tracking-wide text-muted mb-1">PR packaging</div>
+          <div class="space-y-1 mb-3 text-sm">
+            <label class="flex items-center gap-2"><input type="radio" name="pr_strategy" value="per_story" {{ 'checked' if prs != 'single' else '' }}> One PR per story</label>
+            <label class="flex items-center gap-2"><input type="radio" name="pr_strategy" value="single" {{ 'checked' if prs == 'single' else '' }}> One combined PR for all selected stories</label>
+          </div>
+          {% elif state.get("story_mode") == "single" %}
+          <p class="text-xs text-muted mb-3">Single-story mode — only the first implementable ticket builds (one PR).</p>
+          {% endif %}
+          <div class="flex items-center gap-2">
+            <button name="next_action" value="build" class="bg-ok text-bg font-semibold text-sm rounded-lg px-4 h-9 hover:brightness-110">✓ Approve &amp; build</button>
+            {% if rfc_enabled %}
+            <button name="next_action" value="rfc" class="text-sm text-muted hover:text-fg px-3 h-9 rounded-lg border border-border">Approve &amp; write RFC</button>
+            {% endif %}
+          </div>
+          {% if not rfc_enabled %}
+          <p class="text-[11px] text-muted mt-2">RFC is disabled for this project — approving goes straight to build.</p>
+          {% endif %}
+        </form>
+        <form method="post" action="/ui/run/{{ run_id }}/reject" class="mt-2">
+          <input type="hidden" name="stage" value="pm">
+          <button class="text-xs text-danger hover:underline">Reject — don't push tickets</button>
+        </form>
+      </div>
+      {% endif %}
+
+      {# tickets — with expand/collapse-all #}
+      <div class="mt-4 space-y-2" x-data="{ openAll: false }">
+        <div class="flex items-center justify-between">
+          <div class="text-xs uppercase tracking-wide text-muted">Tickets ({{ tickets|length }})</div>
+          {% if tickets|length > 1 %}
+          <button type="button" @click="openAll = !openAll"
+                  class="text-[11px] px-2 h-6 rounded-md border border-border text-muted hover:text-fg hover:border-accent/50">
+            <span x-text="openAll ? 'Collapse all' : 'Expand all'"></span>
+          </button>
+          {% endif %}
+        </div>
+        {% for t in tickets %}
+        <div class="border border-border rounded-lg p-3" x-data="{ open:false }">
+          <button type="button" @click="open=!open" class="w-full flex items-center gap-2 text-left">
+            <span class="font-mono text-xs text-accent">{{ t.id }}</span>
+            <span class="text-sm font-medium flex-1">{{ t.title }}</span>
+            <span class="text-[10px] px-1.5 rounded bg-elevate text-muted">{{ t.get("type","") }}</span>
+            <span class="text-muted text-xs" x-text="(open || openAll) ? '−' : '+'"></span>
+          </button>
+          <div x-show="open || openAll" x-cloak class="mt-2 text-sm text-muted space-y-2">
+            <p class="whitespace-pre-wrap">{{ t.description }}</p>
+            {% if state.get("pending_review") %}
+            {{ ui.hitl_controls(run_id, "pm", t.id) }}
+            {% endif %}
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+    {% else %}
+      {# No spec. Distinguish failed (offer recovery) / running / awaiting / not-yet-run so a failed
+         PM is never a dead end — the client can always re-trigger or refine it here. #}
+      {% if ns.get("error") or status == "failed" %}
+      <p class="text-sm text-danger mb-1">PM didn't produce a spec — see the error above.</p>
+      <p class="text-xs text-muted mb-2">Re-trigger to run PM again, or refine with feedback to steer the next attempt.</p>
+      {{ ui.hitl_controls(run_id, "pm") }}
+      {% elif status == "running" %}
+      <p class="text-sm text-muted">{{ ns.get("note") or "PM is generating the spec…" }}</p>
+      {% elif status == "awaiting" and state.get("pending_trigger") == "pm" %}
+      <p class="text-sm text-muted">{{ ns.get("note") or "Trigger PM above to generate the spec." }}</p>
+      {% else %}
+      <p class="text-sm text-muted mb-2">{{ ns.get("note") or "No spec generated yet." }}</p>
+      {{ ui.hitl_controls(run_id, "pm") }}
+      {% endif %}
+    {% endif %}
+
+  {# ── RFC ── #}
+  {% elif selected == "rfc" %}
+    {% if ns.get("doc") %}
+    <h3 class="font-medium mb-2">{{ ns.get("title","RFC") }}</h3>
+    <div data-md class="prose-sm max-w-none text-sm border border-border rounded-lg p-4 max-h-[28rem] overflow-auto">{{ ns.doc }}</div>
+    {{ ui.hitl_controls(run_id, "rfc") }}
+    {% elif status == "running" %}
+    <p class="text-sm text-muted">{{ ns.get("note") or "RFC is being generated…" }}</p>
+    {% elif status == "awaiting" and state.get("pending_trigger") == "rfc" %}
+    <p class="text-sm text-muted">{{ ns.get("note") or "Trigger RFC above to produce a design doc." }}</p>
+    {% else %}
+    {# failed / skipped / not-run — always offer a way to (re-)trigger RFC #}
+    {% if ns.get("error") %}<p class="text-sm text-danger mb-2">RFC failed — see the error above.</p>{% endif %}
+    <p class="text-sm text-muted mb-2">{{ ns.get("note") or "No RFC generated. RFC is opt-in — re-trigger it to produce a design doc." }}</p>
+    {{ ui.hitl_controls(run_id, "rfc") }}
+    {% endif %}
+  {% endif %}
+</div>

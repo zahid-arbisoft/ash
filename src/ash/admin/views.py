@@ -14,6 +14,7 @@ from ash.db.models import (
     RunRecord,
     SpecRecord,
     StoryRecord,
+    Workflow,
 )
 
 
@@ -87,6 +88,7 @@ class RunRecordAdmin(ModelView, model=RunRecord):
         RunRecord.item_id,
         RunRecord.intake_mode,
         RunRecord.story_mode,
+        RunRecord.pr_strategy,
         RunRecord.status,
         RunRecord.created_at,
     ]
@@ -228,6 +230,30 @@ class AgentLLMExchangeAdmin(ModelView, model=AgentLLMExchange):
         AgentLLMExchange.completion_tokens,
         AgentLLMExchange.created_at,
     ]
+
+
+class WorkflowAdmin(ModelView, model=Workflow):
+    name = "Workflow"
+    name_plural = "Workflows"
+    icon = "fa-solid fa-diagram-project"
+    column_list = [
+        Workflow.id,
+        Workflow.name,
+        Workflow.story_execution,
+        Workflow.is_default,
+        Workflow.disabled,
+        Workflow.version,
+        Workflow.updated_at,
+    ]
+    form_columns = [
+        Workflow.name,
+        Workflow.description,
+        Workflow.steps,
+        Workflow.story_execution,
+        Workflow.is_default,
+        Workflow.disabled,
+    ]
+    column_default_sort = [(Workflow.is_default, True)]
 
 
 class AdminUserAdmin(ModelView, model=AdminUser):

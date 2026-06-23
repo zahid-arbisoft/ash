@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% import "_macros.html" as ui %}
 {% block title %}Dashboard{% endblock %}
 {% block breadcrumb %}Dashboard{% endblock %}
 {% block body %}
@@ -17,23 +18,27 @@
 <!-- KPI strip -->
 {% set wm = week_metrics or {} %}
 <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
-  {% macro kpi(label, value, tone, sub="") %}
-    <div class="bg-surface border border-border rounded-xl p-4">
+  {% macro kpi(label, value, tone, sub="", href="") %}
+    {% set inner %}
       <div class="text-2xl font-semibold {{ tone }}">{{ value }}</div>
       <div class="text-xs uppercase tracking-wide text-muted mt-1">{{ label }}</div>
       {% if sub %}<div class="text-[11px] text-muted/60 mt-0.5">{{ sub }}</div>{% endif %}
-    </div>
+    {% endset %}
+    {% if href %}<a href="{{ href }}" class="block bg-surface border border-border rounded-xl p-4 hover:border-accent/50 transition-colors">{{ inner }}</a>
+    {% else %}<div class="bg-surface border border-border rounded-xl p-4">{{ inner }}</div>{% endif %}
   {% endmacro %}
-  {{ kpi("Recent runs", runs|length, "text-fg") }}
-  {{ kpi("Connectors", connectors|length, "text-fg") }}
+  {{ kpi("Active runs", active_runs, "text-warn" if active_runs else "text-fg",
+         "%s total"|format(total_runs), "/ui/runs") }}
+  {{ kpi("Awaiting you", awaiting_runs, "text-accent" if awaiting_runs else "text-fg",
+         "approvals & triggers", "/ui/approvals") }}
   {% if wm.total_tokens %}
     {{ kpi("Tokens · 7d", "{:,}".format(wm.total_tokens), "text-accent",
-           "↑%s ↓%s"|format("{:,}".format(wm.prompt_tokens or 0), "{:,}".format(wm.completion_tokens or 0))) }}
+           "↑%s ↓%s"|format("{:,}".format(wm.prompt_tokens or 0), "{:,}".format(wm.completion_tokens or 0)), "/ui/io") }}
     {{ kpi("Agent time · 7d", "%.0fs"|format((wm.duration_ms or 0)/1000), "text-accent",
            "%s agent run(s)"|format(wm.runs or 0)) }}
   {% else %}
+    {{ kpi("Connectors", connectors|length, "text-fg", "", "/ui/connectors") }}
     {{ kpi("Sources", connectors|selectattr("is_source")|list|length, "text-accent") }}
-    {{ kpi("Sinks", connectors|selectattr("is_sink")|list|length, "text-accent") }}
   {% endif %}
 </div>
 
@@ -52,23 +57,21 @@
             <th class="font-medium px-5 py-2">Run</th>
             <th class="font-medium px-3 py-2">Project</th>
             <th class="font-medium px-3 py-2">Item</th>
-            <th class="font-medium px-3 py-2">Mode</th>
+            <th class="font-medium px-3 py-2">Status</th>
             <th class="font-medium px-5 py-2 text-right">When</th>
           </tr>
         </thead>
         <tbody>
         {% for r in runs %}
-          {% set tone = {"raw_to_spec":"bg-accent/15 text-accent",
-                         "spec_ready":"bg-ok/15 text-ok",
-                         "raw_to_dev":"bg-warn/15 text-warn"}.get(r.intake_mode, "bg-border text-muted") %}
-          <tr class="border-t border-border/60 hover:bg-elevate/40">
+          <tr class="border-t border-border/60 hover:bg-elevate/40 cursor-pointer"
+              onclick="window.location='/ui/run/{{ r.run_id }}'">
             <td class="px-5 py-2.5">
-              <a href="/ui/runs/{{ r.run_id }}" class="font-mono text-accent hover:underline">{{ r.run_id[:8] }}</a>
+              <a href="/ui/run/{{ r.run_id }}" class="font-mono text-accent hover:underline">{{ r.run_id[:8] }}</a>
             </td>
             <td class="px-3 py-2.5">{{ r.project }}</td>
             <td class="px-3 py-2.5 text-muted">{{ r.item_id }}</td>
             <td class="px-3 py-2.5">
-              <span class="text-xs px-2 py-0.5 rounded-full {{ tone }}">{{ r.intake_mode }}</span>
+              <span class="inline-flex items-center gap-1.5 text-xs">{{ ui.status_dot(r.status or "running") }} {{ (r.status or "running").replace("_"," ") }}</span>
             </td>
             <td class="px-5 py-2.5 text-right text-muted whitespace-nowrap">{{ r.created_at.strftime("%b %d, %H:%M") }}</td>
           </tr>
@@ -114,11 +117,5 @@
     {% endif %}
   </section>
 </div>
-
-<!-- Planned-section hint (matches sidebar "soon" items) -->
-<p class="mt-6 text-xs text-muted/70">
-  Work board, PM runs, Agents and Approvals views are planned next — see the roadmap in
-  <span class="font-mono">docs/plan/agent_runtime_and_connectors_plan.md</span> §13.
-</p>
 
 {% endblock %}

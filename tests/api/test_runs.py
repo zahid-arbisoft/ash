@@ -27,7 +27,7 @@ def _app():
     app.include_router(router)
     agents = {
         n: StubAgent(n)
-        for n in ("intake", "pm", "pm_publish", "rfc", "research", "coding", "reviewer", "fixer")
+        for n in ("intake", "pm", "pm_publish", "rfc", "research", "dev", "reviewer", "fixer")
     }
     app.state.runner = Runner(graph=build_graph(agents, checkpointer=MemorySaver()))
     return app

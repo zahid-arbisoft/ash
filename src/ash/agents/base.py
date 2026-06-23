@@ -108,6 +108,17 @@ class BaseAgent(ABC):
         self._usage["prompt_tokens"] += tu.get("prompt_tokens", 0)
         self._usage["completion_tokens"] += tu.get("completion_tokens", 0)
 
+    def _extra_instructions(self, state: WorkflowState) -> str:
+        """Optional custom prompt to fold into this agent's prompt (decision #33).
+
+        Combines the run-wide standing instruction (`state.run_prompt`, set on the new-run form)
+        with this agent's one-shot custom prompt (`state.custom_prompts[self.name]`, set by a
+        cockpit re-trigger). Returns "" when neither is set. The per-agent entry is cleared by the
+        node wrapper after the run (consume-once); `run_prompt` persists for the whole run.
+        """
+        parts = [state.run_prompt, state.custom_prompts.get(self.name, "")]
+        return "\n\n".join(p.strip() for p in parts if p and p.strip())
+
     @abstractmethod
     async def run(self, state: WorkflowState) -> dict[str, Any]:
         """Return a partial state update scoped to this agent's namespace."""
@@ -142,26 +153,52 @@ class BaseAgent(ABC):
         )
 
     async def _resolve_policy(self, state: WorkflowState) -> tuple[Any, AgentPolicy] | None:
-        """Return ``(project, policy)`` with the effective policy (DB override > YAML >
-        default), or ``None`` when the project config can't be loaded.
+        """Return ``(project, policy)`` with the effective policy, or ``None`` when the project
+        config can't be loaded.
 
-        Centralised so the enabled/trigger checks and any agent-specific opt-in logic
-        all read ONE resolved policy from ONE source (the config layer + DB), instead
-        of each agent re-loading config independently and drifting apart.
+        Precedence (highest first), so the Agents page always wins and a per-run workflow only
+        defaults what the Agents page hasn't pinned (workflow-builder):
+
+            AgentPolicyRecord (Agents page / DB override)
+              > run's workflow snapshot step (trigger + enabled)
+                > projects/<name>.yaml
+                  > code default (manual, enabled)
+
+        Centralised so every enabled/trigger check reads ONE resolved policy.
         """
         try:
             project = load_project(state.project)
         except Exception:  # noqa: BLE001 — missing project config → no policy
             return None
-        # Merge DB overrides so UI enable/disable + trigger changes are respected.
+        yaml_policy = project.agent_policy(self.name)
         try:
             from ash.db.base import get_sessionmaker
-            from ash.db.tasks import resolve_policy
+            from ash.db.tasks import get_policy_override
+            from ash.db.workflows import step_policy
 
             async with get_sessionmaker()() as session:
-                policy = await resolve_policy(session, project, self.name)
+                db_override = await get_policy_override(session, project.name, self.name)
+            if db_override is not None:
+                # Agents page set this agent explicitly → it wins over the workflow entirely.
+                policy = AgentPolicy(
+                    trigger=db_override.trigger,
+                    enabled=db_override.enabled,
+                    concurrency_limit=db_override.concurrency_limit,
+                    daily_quota=db_override.daily_quota,
+                    max_retries=db_override.max_retries,
+                    schedule_cron=db_override.schedule_cron,
+                )
+            else:
+                # No DB override → the run's workflow defaults trigger/enabled over YAML.
+                wf_step = step_policy(state.workflow_snapshot, self.name)
+                if wf_step is not None:
+                    policy = yaml_policy.model_copy(
+                        update={"trigger": wf_step["trigger"], "enabled": wf_step["enabled"]}
+                    )
+                else:
+                    policy = yaml_policy
         except Exception:  # noqa: BLE001 — DB unavailable → fall back to YAML
-            policy = project.agent_policy(self.name)
+            policy = yaml_policy
         return project, policy
 
     async def _trigger_gate(

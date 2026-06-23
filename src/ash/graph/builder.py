@@ -8,12 +8,15 @@ Intake fetches the issue; a **conditional edge** routes by `intake_mode`:
 `plan_stories` turns the spec (or raw issue) into one or more `StoryState`s (dependency-sorted).
 The **story loop** then builds them **one at a time**:
 
-    plan_stories → story_router ──(next story)──► story_build (subgraph) → story_router ...
+    plan_stories → story_router ──(next story)──► research → dev → reviewer → fixer
+                        ↑                                                          │
+                        └──────────────── story_finalize ◄────────────────────────┘
                         └──────────(no story left)──────────► merge → END
 
-`story_build` is a compiled subgraph (Research → Coding → Reviewer → Fixer → finalize) over the same
-`WorkflowState`, with no own checkpointer — the parent's Postgres checkpointer persists everything,
-so interrupts/resume bubble through. Each build node is **story-scoped** (see `graph/nodes.py`).
+Build nodes are inlined in the parent graph (NOT a compiled subgraph) so that `interrupt()` calls
+inside each agent fire at the parent-graph level, where `Command(resume=…)` correctly resumes from
+the interrupted node rather than restarting the whole pipeline. Each node is story-scoped via
+`make_node` (see `graph/nodes.py`).
 
 The `merge` terminal node sets `status` from the per-story outcomes and sweeps any leftover
 worktrees. RFC is opt-in (self-skips) and runs once per run (never per story).
@@ -35,7 +38,7 @@ from ash.graph.stories import build_stories, next_story
 logger = logging.getLogger(__name__)
 
 # The per-story build team, in order. Each is a story-scoped node (decision #26).
-STORY_BUILD_ORDER = ("research", "coding", "reviewer", "fixer")
+STORY_BUILD_ORDER = ("research", "dev", "reviewer", "fixer")
 
 
 async def _remove_worktree(project: Any, wt: str | None) -> None:
@@ -148,7 +151,11 @@ async def _story_finalize(state: WorkflowState) -> dict[str, Any]:
         story.status = "failed"
     else:
         story.status = "completed"
-    wt = story.research.worktree_path or story.coding.worktree_path
+    # Combined-PR strategy (F7): all stories share one worktree, so DON'T remove it here — the next
+    # story stacks onto it. The final `_merge` sweep cleans it up once the run ends.
+    wt = None if state.pr_strategy == "single" else (
+        story.research.worktree_path or story.dev.worktree_path
+    )
     from ash.config.settings import load_project
 
     try:
@@ -197,7 +204,9 @@ async def _merge(state: WorkflowState) -> dict[str, Any]:
         project = load_project(state.project)
         seen: set[str] = set()
         for s in state.stories.values():
-            for wt in (s.research.worktree_path, s.coding.worktree_path):
+            # `state.combined_worktree` is the shared worktree for the single-PR strategy (F7);
+            # include it so the run's final sweep removes it (per-story finalize skips it).
+            for wt in (s.research.worktree_path, s.dev.worktree_path, state.combined_worktree):
                 if wt and wt not in seen:
                     seen.add(wt)
                     await _remove_worktree(project, wt)
@@ -235,22 +244,6 @@ def _route_after_rfc(state: WorkflowState) -> str:
     return "plan_stories"
 
 
-def _build_story_subgraph(agents: dict[str, Agent]) -> Any:
-    """The per-story build pipeline as a compiled subgraph over WorkflowState (no own
-    checkpointer — the parent graph persists state and bubbles interrupts)."""
-    sub: Any = StateGraph(WorkflowState)
-    for name in STORY_BUILD_ORDER:
-        sub.add_node(name, make_node(agents[name], node_name=name))
-    sub.add_node("story_finalize", _story_finalize)
-    sub.add_edge(START, "research")
-    sub.add_edge("research", "coding")
-    sub.add_edge("coding", "reviewer")
-    sub.add_edge("reviewer", "fixer")
-    sub.add_edge("fixer", "story_finalize")
-    sub.add_edge("story_finalize", END)
-    return sub.compile()
-
-
 def build_graph(agents: dict[str, Agent], *, checkpointer: Any) -> Any:
     # langgraph's StateGraph generics are intricate; treat the builder handle as untyped.
     graph: Any = StateGraph(WorkflowState)
@@ -261,7 +254,10 @@ def build_graph(agents: dict[str, Agent], *, checkpointer: Any) -> Any:
     graph.add_node("rfc", make_node(agents["rfc"], node_name="rfc"))
     graph.add_node("plan_stories", _plan_stories)
     graph.add_node("story_router", _story_router)
-    graph.add_node("story_build", _build_story_subgraph(agents))
+    # Build pipeline inlined (no compiled subgraph — see module docstring).
+    for name in STORY_BUILD_ORDER:
+        graph.add_node(name, make_node(agents[name], node_name=name))
+    graph.add_node("story_finalize", _story_finalize)
     graph.add_node("merge", _merge)
 
     graph.add_edge(START, "intake")
@@ -285,9 +281,13 @@ def build_graph(agents: dict[str, Agent], *, checkpointer: Any) -> Any:
     graph.add_conditional_edges(
         "story_router",
         _route_story,
-        {"build": "story_build", "done": "merge"},
+        {"build": "research", "done": "merge"},
     )
-    graph.add_edge("story_build", "story_router")
+    graph.add_edge("research", "dev")
+    graph.add_edge("dev", "reviewer")
+    graph.add_edge("reviewer", "fixer")
+    graph.add_edge("fixer", "story_finalize")
+    graph.add_edge("story_finalize", "story_router")
     graph.add_edge("merge", END)
 
     return graph.compile(checkpointer=checkpointer)

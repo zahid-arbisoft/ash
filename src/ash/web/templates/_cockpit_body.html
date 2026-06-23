@@ -1,0 +1,89 @@
+{# Cockpit body: control bar + pipeline rail + selected stage panel.
+   Context: run_id, state, stages, selected, story_ids, selected_story, stories, metrics,
+   live_stream, triggers, build_stages, stage_labels. Re-rendered on each SSE tick. #}
+{% import "_macros.html" as ui %}
+{%- set status = state.get("status", "running") -%}
+{%- set tot = (metrics.get("totals") or {}) -%}
+{%- set selected_is_build = selected in build_stages -%}
+
+{% if state.get("stalled") %}
+{# Run orphaned (e.g. server restarted mid-run): an agent was triggered but nothing is driving it. #}
+<div class="border border-danger/40 bg-danger/5 rounded-lg p-4 mb-4">
+  <p class="text-sm text-danger font-semibold">⚠ This run appears to have stopped unexpectedly.</p>
+  <p class="text-xs text-muted mt-1 mb-3">
+    The <span class="font-semibold">{{ stage_labels.get(state.stalled_stage, state.stalled_stage) }}</span>
+    agent{% if state.get("stalled_story") %} (story <span class="font-mono">{{ state.stalled_story }}</span>){% endif %}
+    was running but no live worker is advancing it — the server may have restarted. Restart to resume from the last checkpoint.
+  </p>
+  <div class="flex items-center gap-2">
+    <form method="post" action="/ui/run/{{ run_id }}/restart">
+      <input type="hidden" name="stage" value="{{ selected }}"><input type="hidden" name="story" value="{{ selected_story }}">
+      <button class="text-xs font-semibold px-3 h-8 rounded-lg bg-accent text-bg hover:brightness-110">▶ Restart run</button>
+    </form>
+    <form method="post" action="/ui/run/{{ run_id }}/retry">
+      <input type="hidden" name="stage" value="{{ state.stalled_stage }}"><input type="hidden" name="story" value="{{ state.get('stalled_story','') }}">
+      <button class="text-xs font-semibold px-3 h-8 rounded-lg bg-warn/20 text-warn hover:bg-warn/30">↻ Retry {{ stage_labels.get(state.stalled_stage, state.stalled_stage) }}</button>
+    </form>
+  </div>
+</div>
+{% endif %}
+
+{# ── control + analytics bar ── #}
+<div class="flex flex-wrap items-center gap-2 mb-4">
+  {%- set disp_status = "stalled" if state.get("stalled") else status -%}
+  <span class="text-xs px-2 py-1 rounded {{ ui.status_tone('failed' if state.get('stalled') else status) }}">{{ disp_status.replace("_"," ") }}</span>
+
+  {% if status == "running" and not state.get("stalled") %}
+  <form method="post" action="/ui/run/{{ run_id }}/stop">
+    <input type="hidden" name="stage" value="{{ selected }}"><input type="hidden" name="story" value="{{ selected_story }}">
+    <button class="text-xs font-semibold px-3 h-8 rounded-lg border border-danger/50 text-danger hover:bg-danger/10">◼ Stop</button>
+  </form>
+  {% elif status == "cancelled" %}
+  <form method="post" action="/ui/run/{{ run_id }}/restart">
+    <input type="hidden" name="stage" value="{{ selected }}"><input type="hidden" name="story" value="{{ selected_story }}">
+    <button class="text-xs font-semibold px-3 h-8 rounded-lg bg-accent text-bg hover:brightness-110">▶ Restart</button>
+  </form>
+  {% elif status == "failed" %}
+  <form method="post" action="/ui/run/{{ run_id }}/retry">
+    <input type="hidden" name="stage" value="{{ selected }}"><input type="hidden" name="story" value="{{ selected_story }}">
+    <button class="text-xs font-semibold px-3 h-8 rounded-lg bg-warn/20 text-warn hover:bg-warn/30">↻ Retry from failure</button>
+  </form>
+  {% endif %}
+
+  {% if tot.get("total_tokens") %}
+  <span class="text-xs text-muted flex items-center gap-3 ml-auto">
+    <span title="prompt + completion tokens this run">🪙 <span class="font-mono tabular-nums text-fg">{{ "{:,}".format(tot.total_tokens) }}</span> tok</span>
+    <span title="total agent wall-clock">⏱ <span class="font-mono tabular-nums text-fg">{{ "%.1f"|format((tot.duration_ms or 0)/1000) }}s</span></span>
+    <span>{{ tot.get("runs", 0) }} agent run(s)</span>
+  </span>
+  {% endif %}
+</div>
+
+{# ── pipeline rail ── #}
+{% include "_cockpit_rail.html" %}
+
+{# ── story selector (for per-story build stages, when >1 story) ── #}
+{% if selected_is_build and story_ids|length > 1 %}
+<div class="flex items-center gap-2 mt-4 mb-1 text-xs flex-wrap">
+  <span class="text-muted">Story:</span>
+  {% for tid in story_ids %}
+  {%- set s = stories.get(tid) or {} -%}
+  <a href="/ui/run/{{ run_id }}/{{ selected }}?story={{ tid }}"
+     class="px-2.5 h-7 inline-flex items-center gap-1.5 rounded-md border
+            {% if tid == selected_story %}border-accent text-fg bg-accent/10{% else %}border-border text-muted hover:text-fg{% endif %}">
+    {{ ui.status_dot(s.get("status","pending")) }}
+    <span class="font-mono">{{ tid }}</span>
+    <span class="truncate max-w-[12rem]">{{ s.get("title","") }}</span>
+  </a>
+  {% endfor %}
+</div>
+{% endif %}
+
+{# ── selected stage panel ── #}
+<div class="mt-4">
+  {% if selected_is_build %}
+    {% include "_stage_build.html" %}
+  {% else %}
+    {% include "_stage_runlevel.html" %}
+  {% endif %}
+</div>

@@ -27,7 +27,7 @@
       {% for r in col.runs %}
       {% set mt = {"raw_to_spec":"bg-accent/15 text-accent","spec_ready":"bg-ok/15 text-ok",
                    "raw_to_dev":"bg-warn/15 text-warn"}.get(r.intake_mode, "bg-border text-muted") %}
-      <a href="/ui/runs/{{ r.run_id }}"
+      <a href="/ui/run/{{ r.run_id }}"
          class="block bg-surface border border-border rounded-lg p-3 hover:border-accent/50 transition-colors">
         <div class="flex items-center justify-between mb-1">
           <span class="font-mono text-xs text-accent">{{ r.run_id[:8] }}</span>

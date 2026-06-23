@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ash.db.models import AgentLLMExchange
@@ -57,4 +57,49 @@ async def list_exchanges_for_run(
         .where(AgentLLMExchange.run_id == run_id)
         .order_by(AgentLLMExchange.id.asc())
     )
+    return list(rows.scalars().all())
+
+
+# Historical agent-name aliasing for the coding→dev rename (decision #33): a filter for "dev"
+# also matches legacy rows recorded under "coding".
+_AGENT_FILTER_ALIASES = {"dev": ("dev", "coding")}
+
+
+async def list_exchanges(
+    session: AsyncSession,
+    *,
+    run_id: str | None = None,
+    agent: str | None = None,
+    ticket: str | None = None,
+    phase: str | None = None,
+    query: str | None = None,
+    limit: int = 500,
+) -> list[AgentLLMExchange]:
+    """Filtered exchanges across runs (decision #33 / Phase D — the global I/O log).
+
+    Any filter left as None is ignored. `query` matches the model name or agent name
+    (case-insensitive substring). Capped at `limit`, newest first."""
+    stmt = select(AgentLLMExchange)
+    if run_id:
+        stmt = stmt.where(AgentLLMExchange.run_id == run_id)
+    if agent:
+        names = _AGENT_FILTER_ALIASES.get(agent, (agent,))
+        stmt = stmt.where(AgentLLMExchange.agent_name.in_(names))
+    if ticket:
+        stmt = stmt.where(AgentLLMExchange.ticket_id == ticket)
+    if phase:
+        stmt = stmt.where(AgentLLMExchange.phase == phase)
+    if query:
+        like = f"%{query}%"
+        stmt = stmt.where(
+            or_(
+                AgentLLMExchange.model.ilike(like),
+                AgentLLMExchange.agent_name.ilike(like),
+                AgentLLMExchange.project.ilike(like),
+            )
+        )
+    # Newest first for the global view; per-run view re-sorts client-side by group.
+    order = AgentLLMExchange.id.asc() if run_id else AgentLLMExchange.id.desc()
+    stmt = stmt.order_by(order).limit(limit)
+    rows = await session.execute(stmt)
     return list(rows.scalars().all())

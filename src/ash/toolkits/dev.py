@@ -1,4 +1,4 @@
-"""Dev toolkit — sandboxed read/run tools for the CodingAgent and Fixer inner loop.
+"""Dev toolkit — sandboxed read/run tools for the DevAgent and Fixer inner loop.
 
 Wraps worktree-scoped file I/O and shell execution as LangChain `BaseTool`s so
 `create_agent` can call them in its ReAct loop. Writes happen outside the toolkit

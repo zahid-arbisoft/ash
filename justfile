@@ -36,16 +36,13 @@ create-admin user:
     {{run}} create-admin --username {{user}}
 
 # ── API ──
-# run the FastAPI app (needs Postgres up): http://127.0.0.1:8000/docs
+# run the FastAPI app (needs Postgres up): http://127.0.0.1:9000/docs
 serve:
-    {{py}} -m uvicorn ash.api.app:app --reload
+    {{py}} -m uvicorn ash.api.app:app --reload --port 9000
 
 # ── data services ──
 db-up:
     docker compose up -d postgres
-
-chroma-up:
-    docker compose up -d chroma
 
 db-down:
     docker compose down

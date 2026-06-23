@@ -1,14 +1,13 @@
 """Research / Spike agent (read-only) — grounds a plan in the actual repo, in a git worktree.
 
-Sets up the per-ticket worktree (parallel-safety primitive), indexes the worktree into Chroma for
-semantic search, then produces a grounded `ImplementationPlan` via a tool-calling loop. Works from
-the PM spec when one exists, or directly from the raw issue (`raw_to_dev`). No writes happen here.
+Sets up the per-ticket worktree (parallel-safety primitive), then produces a grounded
+`ImplementationPlan` via a tool-calling loop. Works from the PM spec when one exists, or
+directly from the raw issue (`raw_to_dev`). No writes happen here.
 With no local clone configured it records a skip note so a PM-only run still completes.
 """
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from pathlib import Path
 from typing import Any
@@ -16,7 +15,6 @@ from typing import Any
 from ash.agents.base import BaseAgent, GuardrailBlockedError
 from ash.agents.research_doc import publish_research_doc, render_research_doc
 from ash.agents.worktree import ensure_worktree
-from ash.clients.chroma import VectorStoreClient
 from ash.config.settings import load_project
 from ash.graph.state import WorkflowState
 from ash.schemas import ImplementationPlan
@@ -46,17 +44,25 @@ class ResearchAgent(BaseAgent):
 
     async def run(self, state: WorkflowState) -> dict[str, Any]:
         self._reset_usage()
+        # Idempotency: if research already produced a plan and the user hasn't explicitly asked
+        # for a re-run (no feedback), skip so retrigger-dev / retrigger-reviewer don't re-run
+        # research from scratch (the story subgraph always starts at research — decision #33 fix).
+        if state.research.plan and not state.research.feedback:
+            logger.info("[research] plan already exists, passing through (retrigger of later step)")
+            return {}
         skip = await self._trigger_gate(state)
         if skip is not None:
             return skip
 
         brief = state.brief(max_chars=self.settings.brief_max_chars)
         if not brief:
+            logger.warning("[research] skipped: brief is empty (no spec or raw issue)")
             return {"research": {"note": "skipped: no spec or raw issue to work from"}}
 
         project = load_project(state.project)
         setup = await ensure_worktree(project, state, github_token=self.settings.github_token)
         if setup is None:
+            logger.warning("[research] skipped: no local clone — set work.local_repo_path / LOCAL_REPO_PATH for project %r", state.project)
             return {
                 "research": {
                     "note": "skipped: no local clone available "
@@ -65,49 +71,14 @@ class ResearchAgent(BaseAgent):
             }
         wt_path, branch = setup
 
-        # Per-run Chroma collection for semantic search (optional — agent degrades gracefully).
-        chroma: VectorStoreClient | None = None
-        chroma_client = VectorStoreClient(
-            host=self.settings.chroma_host,
-            port=self.settings.chroma_port,
-            collection=f"{state.project}_{state.run_id}_{state.current_story or state.ticket_id}",
-            chunk_max_chars=self.settings.chunk_max_chars,
-            chunk_overlap=self.settings.chunk_overlap,
-            snippet_chars=self.settings.search_snippet_chars,
+        # Per-agent HITL feedback + optional custom prompt (decision #33), consumed once.
+        extra = "\n\n".join(
+            p for p in (
+                (state.research.feedback or "").strip(),
+                self._extra_instructions(state),
+            ) if p
         )
-        cap = self.settings.index_max_files
-        if await asyncio.to_thread(chroma_client.ping):
-            # Guardrail (F7): embedding a huge monorepo client-side can take many minutes and
-            # makes Research look stuck in "indexing…" before its first LLM call. Cheaply check
-            # the file count first; above the cap, skip semantic indexing and use grep search.
-            n_files = await asyncio.to_thread(chroma_client.count_indexable, wt_path, cap)
-            if cap and n_files > cap:
-                logger.info(
-                    "[research] worktree has >%d indexable files — skipping semantic index, "
-                    "using grep-based search instead (set INDEX_MAX_FILES=0 to always index)",
-                    cap,
-                )
-            else:
-                try:
-                    logger.info("[research] resetting chroma collection")
-                    await asyncio.to_thread(chroma_client.reset)
-                    logger.info("[research] indexing worktree into chroma (%d files)", n_files)
-                    n = await asyncio.to_thread(
-                        lambda: chroma_client.index_directory(
-                            wt_path,
-                            max_files=cap,
-                            progress_every=self.settings.index_progress_every,
-                        )
-                    )
-                    logger.info("[research] indexed %d chunks", n)
-                    chroma = chroma_client
-                except Exception as exc:  # noqa: BLE001
-                    logger.warning("[research] chroma index failed (%s) — continuing without", exc)
-        else:
-            logger.info("[research] chroma unavailable — using grep-based fallback search")
-
-        logger.info("[research] starting llm plan loop (chroma=%s)", chroma is not None)
-        plan = await self._plan(wt_path, chroma, brief)
+        plan = await self._plan(wt_path, brief, extra=extra)
         logger.info("[research] plan complete steps=%d", len(plan.steps))
 
         doc_ref = await self._publish_doc(state, project, plan)
@@ -119,6 +90,7 @@ class ResearchAgent(BaseAgent):
                 "worktree_path": str(wt_path),
                 "doc_ref": doc_ref,
                 "tokens": dict(self._usage),
+                "feedback": None,  # consumed this pass
             }
         }
 
@@ -140,24 +112,20 @@ class ResearchAgent(BaseAgent):
             logger.warning("[research] doc publish failed (%s: %s)", type(exc).__name__, exc)
             return None
 
-    async def _plan(
-        self, worktree: Path, client: VectorStoreClient | None, brief: str
-    ) -> ImplementationPlan:
-        toolkit = CodebaseToolkit(client=client, root=worktree)
-        # No pre-dumped tree — the agent explores the repo itself via list_directory /
-        # search_codebase / grep_code / read_file, exactly like Claude Code does.
+    async def _plan(self, worktree: Path, brief: str, *, extra: str = "") -> ImplementationPlan:
+        toolkit = CodebaseToolkit(root=worktree)
+        extra_section = f"\n\n## Additional instructions\n{extra}" if extra else ""
         user_msg = (
-            f"## Work brief\n{brief}\n\n"
+            f"## Work brief\n{brief}{extra_section}\n\n"
             "Use the tools to explore the codebase, then produce the implementation plan."
         )
         try:
             return await self.generate(
-                ImplementationPlan, system=_SYSTEM, user=user_msg, tools=toolkit.get_tools()
+                ImplementationPlan, system=_SYSTEM, user=user_msg, tools=toolkit.get_tools(),
+                context=brief,
             )
         except GuardrailBlockedError:
-            logger.warning(
-                "[research] guardrail blocked — retrying without codebase tools"
-            )
+            logger.warning("[research] guardrail blocked — retrying without codebase tools")
             return await self.generate(
                 ImplementationPlan,
                 system=_SYSTEM,

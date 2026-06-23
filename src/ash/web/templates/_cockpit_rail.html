@@ -1,0 +1,30 @@
+{# Pipeline rail — ordered stage chips with status dot + token chip. Clicking a chip opens that
+   stage's panel (server-rendered). Build-stage chips carry the selected story. #}
+{% import "_macros.html" as ui %}
+<div class="overflow-x-auto -mx-1 px-1">
+  <div class="flex items-stretch gap-1 min-w-max">
+    {% for st in stages %}
+    {%- set is_sel = st.name == selected -%}
+    {%- set href = "/ui/run/" ~ run_id ~ "/" ~ st.name ~ ("?story=" ~ selected_story if st.scoped and selected_story else "") -%}
+    <a href="{{ href }}"
+       class="group relative flex flex-col gap-1 px-3 py-2 rounded-lg border min-w-[7.5rem] transition-colors
+              {% if is_sel %}border-accent bg-accent/5{% else %}border-border hover:border-accent/40 hover:bg-elevate/40{% endif %}">
+      <div class="flex items-center gap-2">
+        {{ ui.status_dot(st.status) }}
+        <span class="text-xs {% if is_sel %}text-fg font-semibold{% else %}text-muted group-hover:text-fg{% endif %}">
+          <span class="opacity-70">{{ st.icon }}</span> {{ st.label }}
+        </span>
+      </div>
+      <div class="flex items-center justify-between gap-1">
+        <span class="text-[10px] {{ ui.status_tone(st.status) }} px-1.5 py-0.5 rounded">{{ st.status }}</span>
+        {% if (st.tokens.get("prompt_tokens") if st.tokens else 0) %}
+        <span class="text-[10px] text-muted font-mono">{{ "{:,}".format((st.tokens.prompt_tokens or 0) + (st.tokens.completion_tokens or 0)) }}</span>
+        {% endif %}
+      </div>
+    </a>
+    {% if not loop.last %}
+    <div class="flex items-center text-muted/40 px-0.5 shrink-0">→</div>
+    {% endif %}
+    {% endfor %}
+  </div>
+</div>

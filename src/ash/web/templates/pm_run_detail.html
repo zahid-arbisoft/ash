@@ -17,7 +17,7 @@
     <p class="text-sm text-muted mt-0.5">{{ rec.project }} · {{ rec.item_id }} · {{ rec.created_at.strftime("%b %d, %Y %H:%M") }}</p>
   </div>
   <div class="flex items-center gap-4">
-    <a href="/ui/pm/{{ run_id }}" class="text-sm text-accent hover:underline">Open in workbench →</a>
+    <a href="/ui/run/{{ run_id }}/pm" class="text-sm text-accent hover:underline">Open in workbench →</a>
     <a href="/ui/runs/{{ run_id }}" class="text-sm text-muted hover:text-fg hover:underline">Live run →</a>
   </div>
 </div>

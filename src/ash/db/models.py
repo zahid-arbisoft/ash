@@ -91,6 +91,12 @@ class RunRecord(Base):
     intake_mode: Mapped[str] = mapped_column(String(40))
     ticket_id: Mapped[str] = mapped_column(String(120), default="")  # build scoped to one ticket
     story_mode: Mapped[str] = mapped_column(String(20), default="single")  # single | multiple
+    # PR packaging for multi-story runs (F7): per_story (one PR each) | single (one combined PR).
+    pr_strategy: Mapped[str] = mapped_column(String(20), default="per_story")
+    # Workflow this run executed with (workflow-builder): id for reference + an immutable snapshot
+    # of the workflow's steps at start, so editing the workflow never changes past/in-flight runs.
+    workflow_id: Mapped[int | None] = mapped_column(Integer, default=None)
+    workflow_snapshot: Mapped[Any | None] = mapped_column(JSON, default=None)
     pm_only: Mapped[bool] = mapped_column(Boolean, default=False)  # PM workbench run (decision #29)
     status: Mapped[str] = mapped_column(String(40), default="running")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
@@ -307,3 +313,34 @@ class AgentPolicyRecord(Base):
 
     def __str__(self) -> str:
         return f"AgentPolicy[{self.project}/{self.agent_name} trigger={self.trigger}]"
+
+
+class Workflow(Base):
+    """A reusable, named agent flow (workflow-builder change).
+
+    `steps` is an ordered JSON list of ``{"agent": str, "trigger": "auto"|"manual",
+    "enabled": bool}``. In v1 (OD1) execution follows the canonical pipeline order; the workflow
+    contributes each agent's enabled/trigger as a per-run default (precedence: AgentPolicyRecord >
+    workflow > YAML > code default). A run snapshots the workflow at start so later edits don't
+    change in-flight/past runs. Soft-deleted via `disabled` (excluded from the run dropdown, still
+    readable for historical runs). At most one workflow per (scope) is `is_default`.
+    """
+
+    __tablename__ = "workflows"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(120))
+    description: Mapped[str] = mapped_column(Text, default="")
+    steps: Mapped[Any] = mapped_column(JSON, default=list)
+    # how the run defaults its per-story controls: all | selected | one_by_one
+    story_execution: Mapped[str] = mapped_column(String(20), default="all")
+    is_default: Mapped[bool] = mapped_column(Boolean, default=False)
+    disabled: Mapped[bool] = mapped_column(Boolean, default=False)  # soft delete
+    version: Mapped[int] = mapped_column(Integer, default=1)  # bumped on every edit
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    def __str__(self) -> str:
+        return f"Workflow[{self.id}:{self.name} v{self.version}{' default' if self.is_default else ''}]"

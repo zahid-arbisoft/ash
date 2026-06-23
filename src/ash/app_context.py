@@ -10,7 +10,7 @@ from typing import Any
 
 from langchain_core.language_models import BaseChatModel
 
-from ash.agents.coding import CodingAgent
+from ash.agents.dev import DevAgent
 from ash.agents.fixer import FixerAgent
 from ash.agents.intake import IntakeAgent
 from ash.agents.pm import PMAgent, PMPublishAgent
@@ -36,7 +36,7 @@ def build_agents(
         "pm_publish": PMPublishAgent(settings),
         "rfc": RFCAgent(settings),
         "research": ResearchAgent(settings),
-        "coding": CodingAgent(settings),
+        "dev": DevAgent(settings),
         "reviewer": ReviewerAgent(settings),
         "fixer": FixerAgent(settings),
     }

@@ -44,6 +44,19 @@ async def ensure_worktree(
     logger.info("[worktree] syncing upstream + base for run=%s", state.run_id)
     await asyncio.to_thread(ws.ensure_upstream)
     base_ref = await asyncio.to_thread(ws.sync_base)
+
+    # Combined-PR strategy (F7): all stories share ONE run-level branch/worktree and stack commits
+    # into a single PR. The first story creates it; later stories REUSE it (so the second story
+    # builds on top of the first instead of wiping it). Per-story strategy (default) keeps the
+    # per-ticket branch + a fresh worktree from base, exactly as before.
+    if state.pr_strategy == "single":
+        branch = state.combined_branch or ws.branch_name_from(
+            f"run-{state.run_id[:8]}", state.issue_title or "combined"
+        )
+        wt_path = await asyncio.to_thread(ws.open_or_create_worktree, branch, base_ref)
+        logger.info("[worktree] single-PR shared worktree branch=%s at %s", branch, wt_path)
+        return wt_path, branch
+
     branch_seed = state.ticket_id or state.item_id
     branch = ws.branch_name_from(branch_seed, state.issue_title)
     logger.info("[worktree] creating worktree branch=%s base=%s", branch, base_ref)

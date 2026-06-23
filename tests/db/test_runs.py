@@ -2,8 +2,9 @@ import pytest_asyncio
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from ash.db.base import Base
-from ash.db.models import RunRecord, SpecRecord
+from ash.db.models import RunRecord, SpecRecord, StoryRecord
 from ash.db.runs import (
+    list_dev_runs,
     list_workbench_runs,
     persist_spec_record,
     search_spec_records,
@@ -109,3 +110,51 @@ async def test_list_workbench_runs_only_pm_only_enriched(maker):
         assert p_total == 2
         rows_q, q_total = await list_workbench_runs(s, query="42")
         assert q_total == 1 and rows_q[0]["run"].run_id == "wb1"
+
+
+async def test_list_dev_runs_only_runs_with_spec_with_story_progress(maker):
+    async with maker() as s:
+        s.add_all(
+            [
+                RunRecord(run_id="d1", project="plane", item_id="42",
+                          intake_mode="raw_to_spec", status="running"),
+                RunRecord(run_id="d2", project="plane", item_id="99",
+                          intake_mode="raw_to_spec", status="completed"),
+                # nospec has no SpecRecord → excluded from the dev workbench list
+                RunRecord(run_id="nospec", project="plane", item_id="7",
+                          intake_mode="raw_to_dev", status="running"),
+            ]
+        )
+        s.add_all(
+            [
+                SpecRecord(run_id="d1", project="plane", item_id="42",
+                           epic_title="Export CSV", summary="export", ticket_count=3),
+                SpecRecord(run_id="d2", project="plane", item_id="99",
+                           epic_title="Add auth", summary="auth", ticket_count=2),
+            ]
+        )
+        # d1 has 1 of 2 stories built; d2 has none persisted yet
+        s.add_all(
+            [
+                StoryRecord(run_id="d1", ticket_id="T1", project="plane", status="completed",
+                            position=0),
+                StoryRecord(run_id="d1", ticket_id="T2", project="plane", status="running",
+                            position=1),
+            ]
+        )
+        await s.commit()
+
+        rows, total = await list_dev_runs(s)
+        assert total == 2  # nospec excluded
+        by_id = {r["run"].run_id: r for r in rows}
+        assert set(by_id) == {"d1", "d2"}
+        assert by_id["d1"]["epic_title"] == "Export CSV"
+        assert by_id["d1"]["stories_total"] == 2
+        assert by_id["d1"]["stories_done"] == 1
+        assert by_id["d2"]["stories_total"] == 0  # nothing built yet
+
+        # search by epic title; project filter
+        rows_q, q_total = await list_dev_runs(s, query="auth")
+        assert q_total == 1 and rows_q[0]["run"].run_id == "d2"
+        _, p_total = await list_dev_runs(s, project="plane")
+        assert p_total == 2

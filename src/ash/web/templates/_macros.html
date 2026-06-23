@@ -1,0 +1,106 @@
+{# Shared UI macros for the run cockpit and friends (decision #33). #}
+
+{# Status → Tailwind tone classes. Statuses: pending, running, awaiting, done, failed, skipped. #}
+{% macro status_tone(status) -%}
+{{- {
+  "pending":  "bg-border/60 text-muted",
+  "running":  "bg-warn/15 text-warn",
+  "awaiting": "bg-accent/15 text-accent",
+  "done":     "bg-ok/15 text-ok",
+  "completed":"bg-ok/15 text-ok",
+  "failed":   "bg-danger/15 text-danger",
+  "cancelled":"bg-border text-muted",
+  "skipped":  "bg-border/40 text-muted/70",
+}.get(status, "bg-border/60 text-muted") -}}
+{%- endmacro %}
+
+{% macro dot_tone(status) -%}
+{{- {
+  "pending":  "bg-muted/40",
+  "running":  "bg-warn animate-pulse",
+  "awaiting": "bg-accent",
+  "done":     "bg-ok",
+  "failed":   "bg-danger",
+  "skipped":  "bg-muted/30",
+}.get(status, "bg-muted/40") -}}
+{%- endmacro %}
+
+{# A small status dot. #}
+{% macro status_dot(status) -%}
+<span class="inline-block w-2 h-2 rounded-full {{ dot_tone(status) }}"></span>
+{%- endmacro %}
+
+{# A status pill (label + tone). #}
+{% macro status_pill(status, label="") -%}
+<span class="text-[11px] px-2 py-0.5 rounded-full {{ status_tone(status) }}">{{ label or status }}</span>
+{%- endmacro %}
+
+{# Token + duration chip from a metrics dict {prompt_tokens, completion_tokens, duration_ms}. #}
+{% macro token_chip(m) -%}
+{%- set pt = (m.get("prompt_tokens") or 0) if m else 0 -%}
+{%- set ct = (m.get("completion_tokens") or 0) if m else 0 -%}
+{%- if pt or ct -%}
+<span class="text-[11px] text-muted font-mono tabular-nums" title="prompt → completion tokens">
+  🪙 {{ "{:,}".format(pt) }}→{{ "{:,}".format(ct) }}
+  {%- if m.get("duration_ms") %} · {{ "%.1f"|format((m.duration_ms or 0)/1000) }}s{% endif -%}
+</span>
+{%- endif -%}
+{%- endmacro %}
+
+{# HITL "refine" + "re-trigger" controls for a stage (and optional story). Collapsible via Alpine. #}
+{% macro hitl_controls(run_id, stage, story="", busy=False) -%}
+<div x-data="{ mode: '' }" class="mt-3">
+  <div class="flex items-center gap-2 text-xs">
+    <button type="button" @click="mode = mode === 'refine' ? '' : 'refine'"
+            class="px-2.5 h-7 rounded-md border border-border text-muted hover:text-fg hover:border-accent/50">
+      ✎ Refine with feedback
+    </button>
+    <button type="button" @click="mode = mode === 'retrigger' ? '' : 'retrigger'"
+            class="px-2.5 h-7 rounded-md border border-border text-muted hover:text-fg hover:border-accent/50">
+      ↻ Re-trigger {% if not busy %}{% endif %}
+    </button>
+  </div>
+
+  <form x-show="mode === 'refine'" x-cloak method="post" action="/ui/run/{{ run_id }}/refine"
+        class="mt-2 space-y-2">
+    <input type="hidden" name="stage" value="{{ stage }}">
+    <input type="hidden" name="story" value="{{ story }}">
+    <textarea name="feedback" rows="3" required placeholder="What should the {{ stage }} agent change or improve?"
+              class="w-full text-sm rounded-lg border border-border bg-bg p-2"></textarea>
+    <input name="custom_prompt" placeholder="Optional extra instructions for this pass"
+           class="w-full text-sm rounded-lg border border-border bg-bg p-2">
+    <button type="submit" class="bg-accent text-bg text-xs font-semibold rounded-md px-3 h-8 hover:brightness-110">
+      Apply feedback &amp; re-run
+    </button>
+  </form>
+
+  <form x-show="mode === 'retrigger'" x-cloak method="post" action="/ui/run/{{ run_id }}/retrigger"
+        class="mt-2 space-y-2">
+    <input type="hidden" name="stage" value="{{ stage }}">
+    <input type="hidden" name="story" value="{{ story }}">
+    <input name="custom_prompt" placeholder="Optional custom prompt for a better result"
+           class="w-full text-sm rounded-lg border border-border bg-bg p-2">
+    <button type="submit" class="bg-elevate text-fg text-xs font-semibold rounded-md px-3 h-8 border border-border hover:border-accent/50">
+      Re-run {{ stage }}
+    </button>
+  </form>
+</div>
+{%- endmacro %}
+
+{# Trigger / Skip buttons for a manual-trigger gate. #}
+{% macro trigger_controls(run_id, stage, story="") -%}
+<div class="flex items-center gap-2">
+  <form method="post" action="/ui/run/{{ run_id }}/trigger">
+    <input type="hidden" name="stage" value="{{ stage }}"><input type="hidden" name="story" value="{{ story }}">
+    <button type="submit" class="bg-accent text-bg font-semibold text-sm rounded-lg px-4 h-9 hover:brightness-110">
+      ▶ Trigger {{ stage }}
+    </button>
+  </form>
+  <form method="post" action="/ui/run/{{ run_id }}/skip">
+    <input type="hidden" name="stage" value="{{ stage }}"><input type="hidden" name="story" value="{{ story }}">
+    <button type="submit" class="text-sm text-muted hover:text-fg px-3 h-9 rounded-lg border border-border">
+      Skip
+    </button>
+  </form>
+</div>
+{%- endmacro %}

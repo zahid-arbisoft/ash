@@ -97,7 +97,7 @@ class Noop:
 
 
 def _runner(pm=None):
-    agents = {n: Noop(n) for n in ("intake", "rfc", "research", "coding", "reviewer", "fixer")}
+    agents = {n: Noop(n) for n in ("intake", "rfc", "research", "dev", "reviewer", "fixer")}
     agents["pm"] = pm or SpecPM()
     agents["pm_publish"] = GatePMPublish()
     return Runner(graph=build_graph(agents, checkpointer=MemorySaver()), pm_agent=agents["pm"])

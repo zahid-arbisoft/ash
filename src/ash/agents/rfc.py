@@ -65,9 +65,16 @@ class RFCAgent(BaseAgent):
         if not brief:
             return {"rfc": {"note": "skipped: no brief to generate RFC from"}}
 
+        # Per-agent HITL feedback + optional custom prompt (decision #33), consumed once.
+        extra = "\n\n".join(
+            p for p in (
+                (state.rfc.feedback or "").strip(),
+                self._extra_instructions(state),
+            ) if p
+        )
         logger.info("[rfc] generating RFC document")
         try:
-            rfc_doc = await self._generate(brief)
+            rfc_doc = await self._generate(brief, extra=extra)
         except GuardrailBlockedError as exc:
             # RFC is an opt-in, non-blocking design doc. If the LLM gateway's content
             # guardrail blocks it (e.g. a false-positive on the brief's wording), skip
@@ -89,6 +96,7 @@ class RFCAgent(BaseAgent):
                 "title": rfc_doc.title,
                 "note": note,
                 "tokens": dict(self._usage),
+                "feedback": None,  # consumed this pass
             }
         }
 
@@ -108,10 +116,12 @@ class RFCAgent(BaseAgent):
             logger.warning("[rfc] doc publish failed (%s: %s)", type(exc).__name__, exc)
             return None
 
-    async def _generate(self, brief: str) -> RFCDocument:
+    async def _generate(self, brief: str, *, extra: str = "") -> RFCDocument:
+        extra_section = f"\n\n## Additional instructions\n{extra}" if extra else ""
         user = (
             "## Requirements / Spec\n\n"
             + brief
+            + extra_section
             + "\n\nGenerate a complete RFC document based on the above."
         )
-        return await self.generate(RFCDocument, system=_SYSTEM, user=user)
+        return await self.generate(RFCDocument, system=_SYSTEM, user=user, context=brief)

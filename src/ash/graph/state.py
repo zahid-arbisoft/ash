@@ -20,7 +20,10 @@ from ash.schemas import CodeChange, CodeReview, ImplementationPlan, Spec
 
 IntakeMode = Literal["spec_ready", "raw_to_spec", "raw_to_dev"]
 StoryMode = Literal["single", "multiple"]
-StoryStep = Literal["research", "coding", "reviewer", "fixer"]
+StoryStep = Literal["research", "dev", "reviewer", "fixer"]
+# How a multi-story run packages its PRs (F7): one PR per story (default), or one combined PR for
+# all built stories (they share a single run-level branch/worktree and stack commits).
+PRStrategy = Literal["per_story", "single"]
 
 # Sentinel ticket id used for runs that have no spec (raw_to_dev) — one synthetic story.
 RAW_STORY_ID = "_main"
@@ -65,19 +68,29 @@ class ResearchState(BaseModel):
     note: str | None = None  # e.g. "skipped: no local clone configured"
     error: str | None = None
     tokens: dict[str, int] | None = None
+    # Per-agent HITL feedback (consumed once by the agent, then cleared). See PMState.feedback.
+    feedback: str | None = None
 
 
-class CodingState(BaseModel):
+class DevState(BaseModel):
     change: CodeChange | None = None
     files_written: list[str] = Field(default_factory=list)
     pr_url: str | None = None
-    # worktree/branch the change was applied on — set by Coding so the Fixer can locate it
+    # worktree/branch the change was applied on — set by Dev so the Fixer can locate it
     # even when Research was disabled (Research normally records these in ResearchState).
     worktree_path: str | None = None
     branch: str | None = None
     note: str | None = None
     error: str | None = None
     tokens: dict[str, int] | None = None
+    # ── Dev workbench feedback loop (Dev HITL) ─────────────────────────────────────────────
+    # Free-text human feedback to apply on the next dev pass; folded into the dev brief
+    # and consumed once by DevAgent.run (then cleared), mirroring PMState.feedback.
+    feedback: str | None = None
+
+
+# Back-compat alias for any external importers during the coding→dev rename.
+CodingState = DevState
 
 
 class ReviewerState(BaseModel):
@@ -88,6 +101,8 @@ class ReviewerState(BaseModel):
     note: str | None = None
     error: str | None = None
     tokens: dict[str, int] | None = None
+    # Per-agent HITL feedback (consumed once by the agent, then cleared). See PMState.feedback.
+    feedback: str | None = None
 
 
 class FixerState(BaseModel):
@@ -98,6 +113,8 @@ class FixerState(BaseModel):
     note: str | None = None
     error: str | None = None
     tokens: dict[str, int] | None = None
+    # Per-agent HITL feedback (consumed once by the agent, then cleared). See PMState.feedback.
+    feedback: str | None = None
 
 
 class RFCState(BaseModel):
@@ -107,6 +124,8 @@ class RFCState(BaseModel):
     note: str | None = None
     error: str | None = None
     tokens: dict[str, int] | None = None
+    # Per-agent HITL feedback (consumed once by the agent, then cleared). See PMState.feedback.
+    feedback: str | None = None
 
 
 class IntakeState(BaseModel):
@@ -116,9 +135,9 @@ class IntakeState(BaseModel):
 
 class StoryState(BaseModel):
     """Per-story build state (decision #26). The story is the unit of execution: each story owns
-    its own Research/Coding/Reviewer/Fixer namespaces and produces exactly one PR.
+    its own Research/Dev/Reviewer/Fixer namespaces and produces exactly one PR.
 
-    The build-team agents read/write the flat `WorkflowState.research/coding/reviewer/fixer`
+    The build-team agents read/write the flat `WorkflowState.research/dev/reviewer/fixer`
     namespaces; the node adapter hydrates those from the *current* story before each agent runs and
     folds the result back into `stories[ticket_id]` after — so agents stay story-agnostic while
     state is fully per-story.
@@ -134,14 +153,14 @@ class StoryState(BaseModel):
     failed_step: StoryStep | None = None  # which sub-step errored (per-story retry target)
 
     research: ResearchState = Field(default_factory=ResearchState)
-    coding: CodingState = Field(default_factory=CodingState)
+    dev: DevState = Field(default_factory=DevState)
     reviewer: ReviewerState = Field(default_factory=ReviewerState)
     fixer: FixerState = Field(default_factory=FixerState)
 
     def has_error(self) -> bool:
         return any(
             ns.error is not None
-            for ns in (self.research, self.coding, self.reviewer, self.fixer)
+            for ns in (self.research, self.dev, self.reviewer, self.fixer)
         )
 
 
@@ -166,8 +185,15 @@ class WorkflowState(BaseModel):
     integration_id: int | None = None
     attachments: list[str] = Field(default_factory=list)  # uploaded spec files PM should read
     task_sink_id: int | None = None  # where PM pushes tickets (None → admin default → file board)
-    ticket_id: str = ""  # optional: scope the build team (research/coding) to ONE spec ticket
+    ticket_id: str = ""  # optional: scope the build team (research/dev) to ONE spec ticket
     story_mode: StoryMode = "single"  # PM produces one story (default) or many
+    # PR packaging for multi-story runs (F7). `per_story` = one PR per story (default). `single` =
+    # all built stories share ONE run-level branch/worktree and produce ONE combined PR; the shared
+    # identity is recorded below so each story stacks onto it instead of opening its own PR.
+    pr_strategy: PRStrategy = "per_story"
+    combined_branch: str = ""  # shared branch for the single-PR strategy
+    combined_worktree: str = ""  # shared worktree path for the single-PR strategy
+    combined_pr_url: str = ""  # the one PR all stories contribute to (single-PR strategy)
     # PM workbench (decision #29): a pm_only run generates/refines the spec and STOPS — it never
     # auto-flows into rfc/build. The workbench routers read this; full pipeline runs leave it False.
     pm_only: bool = False
@@ -177,13 +203,24 @@ class WorkflowState(BaseModel):
     issue_title: str = ""
     issue_url: str = ""
 
+    # Optional free-text instructions (decision #33). `run_prompt` is set on the new-run form and
+    # folded into the first agent's prompt. `custom_prompts` is keyed by agent name and folded into
+    # that agent's prompt for a single pass (consume-once), set by a re-trigger from the cockpit.
+    run_prompt: str = ""
+    custom_prompts: dict[str, str] = Field(default_factory=dict)
+
+    # Immutable snapshot of the workflow this run executes with (workflow-builder). Shape:
+    # {workflow_id, name, version, story_execution, steps:[{agent,trigger,enabled}]}. Empty = the
+    # built-in default flow. Policy resolution layers this between the DB override and YAML.
+    workflow_snapshot: dict[str, Any] = Field(default_factory=dict)
+
     intake: IntakeState = Field(default_factory=IntakeState)
     pm: PMState = Field(default_factory=PMState)
     rfc: RFCState = Field(default_factory=RFCState)
     # Flat build-team namespaces = per-story SCRATCH. The node adapter hydrates these from the
     # current story before an agent runs and writes the result back into `stories[current_story]`.
     research: ResearchState = Field(default_factory=ResearchState)
-    coding: CodingState = Field(default_factory=CodingState)
+    dev: DevState = Field(default_factory=DevState)
     reviewer: ReviewerState = Field(default_factory=ReviewerState)
     fixer: FixerState = Field(default_factory=FixerState)
 
@@ -203,7 +240,7 @@ class WorkflowState(BaseModel):
         """The text the build team works from.
 
         - If a `ticket_id` is set and the spec contains it → a focused brief for that ONE ticket
-          (epic context + the ticket), so research/coding build a single ticket per run.
+          (epic context + the ticket), so research/dev build a single ticket per run.
         - Else if a spec exists → the whole spec.
         - Else → the raw issue.
 
